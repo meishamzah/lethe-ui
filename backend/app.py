@@ -36,16 +36,54 @@ def reset():
 def send():
     text = request.form.get("text", "")
     image = request.files.get("image")
+    code_file = request.files.get("code_file")
+    text_file = request.files.get("text_file")
+    pdf_file = request.files.get("pdf_file")
     auto_rename_images = request.form.get("auto_rename_images", "1") == "1"
     auto_title_chats = request.form.get("auto_title_chats", "1") == "1"
 
     image_path = None
+    code_path = None
+    code_id = None
+    text_path = None
+    pdf_path = None
+
     if image:
         image_path = os.path.join("uploads", image.filename)
         os.makedirs("uploads", exist_ok=True)
         image.save(image_path)
 
-    result = session.send(text, image_path=image_path, auto_rename_images=auto_rename_images, auto_title_chats=auto_title_chats)
+    if code_file:
+        code_path = os.path.join("uploads", "code", code_file.filename)
+        os.makedirs(os.path.join("uploads", "code"), exist_ok=True)
+        code_file.save(code_path)
+        code_id = code_file.filename
+
+    if text_file:
+        text_path = os.path.join("uploads", "text", text_file.filename)
+        os.makedirs(os.path.join("uploads", "text"), exist_ok=True)
+        text_file.save(text_path)
+
+    if pdf_file:
+        pdf_file.seek(0, 2)
+        pdf_size = pdf_file.tell()
+        pdf_file.seek(0)
+        if pdf_size > 32 * 1024 * 1024:
+            return jsonify({"error": "PDF exceeds 32MB limit"}), 400
+        pdf_path = os.path.join("uploads", "pdf", pdf_file.filename)
+        os.makedirs(os.path.join("uploads", "pdf"), exist_ok=True)
+        pdf_file.save(pdf_path)
+
+    result = session.send(
+        text,
+        image_path=image_path,
+        code_path=code_path,
+        code_id=code_id,
+        text_path=text_path,
+        pdf_path=pdf_path,
+        auto_rename_images=auto_rename_images,
+        auto_title_chats=auto_title_chats
+    )
 
     response = {"reply": result["reply"]}
     if result.get("chat_title"):
@@ -57,7 +95,14 @@ def send():
 
 @app.route("/status", methods=["GET"])
 def status():
-    return jsonify({"blocks": session.blocks})
+    safe_blocks = {}
+    strip_keys = {"base_code", "content", "diffs"}
+    for block_id, meta in session.blocks.items():
+        safe_meta = {k: v for k, v in meta.items() if k not in strip_keys}
+        if meta.get("type") == "code":
+            safe_meta["versions"] = len(meta.get("diffs", [])) + 1
+        safe_blocks[block_id] = safe_meta
+    return jsonify({"blocks": safe_blocks})
 
 @app.route("/compress", methods=["POST"])
 def compress():
@@ -86,4 +131,4 @@ def history():
     return jsonify({"history": safe_history})
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, use_reloader=False)

@@ -36,6 +36,14 @@ function relativeTime(ts) {
   const d = Math.floor(diff / 86400); return `${d} day${d > 1 ? "s" : ""} ago`
 }
 
+function getBlockTokens(meta) {
+  if (!meta) return 0
+  if (meta.type === "code") return meta.code_tokens || 0
+  if (meta.type === "text") return meta.text_tokens || 0
+  if (meta.type === "pdf") return meta.pdf_tokens || 0
+  return meta.image_tokens || 0
+}
+
 function BlockThumb({ id, meta, previews, isCompressing, height, square }) {
   const wrapStyle = {
     borderRadius: square ? "6px 6px 0 0" : 6,
@@ -75,6 +83,43 @@ function BlockThumb({ id, meta, previews, isCompressing, height, square }) {
   )
 }
 
+function FileIcon({ type, compressed }) {
+  const accent = compressed ? "#444" : "#666"
+  const teal = compressed ? "#555" : "#4ECDC4"
+  const bg = "#1E1E1E"
+  const border = compressed ? "#2A2A2A" : "#333"
+
+  const box = {
+    width: 32, height: 32, borderRadius: 6,
+    background: bg, border: `1px solid ${border}`,
+    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0
+  }
+
+  if (type === "code") return (
+    <div style={box}>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M5 5L3 8L5 11" stroke={teal} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M11 5L13 8L11 11" stroke={teal} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M9 3.5L7 12.5" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    </div>
+  )
+  if (type === "pdf") return (
+    <div style={box}>
+      <span style={{ fontSize: 8, fontWeight: 700, color: compressed ? "#555" : "#e05555", fontFamily: "monospace", letterSpacing: "0.02em" }}>PDF</span>
+    </div>
+  )
+  return (
+    <div style={box}>
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <line x1="2" y1="4" x2="12" y2="4" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
+        <line x1="2" y1="7" x2="12" y2="7" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
+        <line x1="2" y1="10" x2="8" y2="10" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    </div>
+  )
+}
+
 function Pill({ label, active, onClick }) {
   return (
     <button className={`pill${active ? " pill-active" : ""}`} onClick={onClick}>
@@ -92,9 +137,11 @@ export default function App() {
   const [selected, setSelected] = useState([])
   const [showConfirm, setShowConfirm] = useState(false)
   const bottomRef = useRef(null)
-  const [imageFile, setImageFile] = useState(null)
-  const [imagePreview, setImagePreview] = useState(null)
-  const fileInputRef = useRef(null)
+  const [pendingFile, setPendingFile] = useState(null)
+  const imageInputRef = useRef(null)
+  const codeInputRef = useRef(null)
+  const textInputRef = useRef(null)
+  const pdfInputRef = useRef(null)
   const [previews, setPreviews] = useState({})
   const [chats, setChats] = useState([{ id: 1, title: "New Chat" }])
   const [activeChatId, setActiveChatId] = useState(1)
@@ -108,6 +155,8 @@ export default function App() {
   const [typeFilter, setTypeFilter] = useState("all")
   const [settings, setSettings] = useState(loadSettings)
   const [showSettings, setShowSettings] = useState(false)
+  const [uploadMenuOpen, setUploadMenuOpen] = useState(false)
+  const uploadWrapperRef = useRef(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -119,6 +168,15 @@ export default function App() {
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
   }, [overlayImage])
+
+  useEffect(() => {
+    if (!uploadMenuOpen) return
+    const handler = (e) => {
+      if (!uploadWrapperRef.current?.contains(e.target)) setUploadMenuOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [uploadMenuOpen])
 
   const handleSettingsChange = (newSettings) => {
     if (newSettings.defaultViewMode !== settings.defaultViewMode) setViewMode(newSettings.defaultViewMode)
@@ -135,6 +193,7 @@ export default function App() {
     setBlocks({})
     setPreviews({})
     setSelected([])
+    setPendingFile(null)
     setCompressionMsg(null)
   }
 
@@ -147,6 +206,7 @@ export default function App() {
     setBlocks({})
     setPreviews({})
     setSelected([])
+    setPendingFile(null)
     setCompressionMsg(null)
     setCompressionMsgFading(false)
   }
@@ -158,20 +218,28 @@ export default function App() {
   }
 
   const sendMessage = async () => {
-    if (!input.trim() && !imageFile) return
-    const capturedPreview = imagePreview
-    const capturedFilename = imageFile?.name
+    if (!input.trim() && !pendingFile) return
+    const capturedFile = pendingFile
     const isFirstMessage = messages.length === 0
-    const userMsg = { role: "user", content: input, image: capturedPreview }
+    const userMsg = {
+      role: "user",
+      content: input,
+      image: capturedFile?.type === "image" ? capturedFile.preview : null,
+      attachedFile: capturedFile && capturedFile.type !== "image"
+        ? { name: capturedFile.file.name, type: capturedFile.type }
+        : null
+    }
     setMessages(prev => [...prev, userMsg])
     setInput("")
-    setImageFile(null)
-    setImagePreview(null)
+    setPendingFile(null)
     setLoading(true)
     try {
       const formData = new FormData()
       formData.append("text", input)
-      if (imageFile) formData.append("image", imageFile)
+      if (capturedFile) {
+        const fieldName = { image: "image", code: "code_file", text: "text_file", pdf: "pdf_file" }[capturedFile.type]
+        formData.append(fieldName, capturedFile.file)
+      }
       formData.append("auto_rename_images", settings.autoRenameImages ? "1" : "0")
       formData.append("auto_title_chats", settings.autoTitleChats ? "1" : "0")
 
@@ -185,7 +253,8 @@ export default function App() {
         setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, title } : c))
       }
 
-      if (data.image_title && capturedFilename && settings.autoRenameImages) {
+      if (data.image_title && capturedFile?.type === "image" && settings.autoRenameImages) {
+        const capturedFilename = capturedFile.file.name
         setPreviews(prev => {
           const next = { ...prev }
           if (next[capturedFilename]) {
@@ -223,11 +292,11 @@ export default function App() {
 
   const confirmCompress = async () => {
     setShowConfirm(false)
-    const eligibleIds = selected.filter(id => (blocks[id]?.image_tokens || 0) >= settings.compressionMinTokens)
+    const eligibleIds = selected.filter(id => getBlockTokens(blocks[id]) >= settings.compressionMinTokens)
     if (eligibleIds.length === 0) { setSelected([]); return }
     setCompressingIds(eligibleIds)
     setCompressing(true)
-    const prevTokens = Object.values(blocks).reduce((sum, b) => sum + (b.image_tokens || 0), 0)
+    const prevTokens = Object.values(blocks).reduce((sum, b) => sum + getBlockTokens(b), 0)
     try {
       await Promise.all([
         fetch(`${API}/compress`, {
@@ -241,9 +310,9 @@ export default function App() {
       const statusData = await statusRes.json()
       const newBlocksData = statusData.blocks
       const newTotalTokens = Object.values(newBlocksData).reduce((sum, b) =>
-        sum + (b.compressed ? (b.summary_tokens || 0) : (b.image_tokens || 0)), 0)
+        sum + (b.compressed ? (b.summary_tokens || 0) : getBlockTokens(b)), 0)
       const savedNow = Object.values(newBlocksData).reduce((sum, b) =>
-        b.compressed ? sum + (b.image_tokens || 0) - (b.summary_tokens || 0) : sum, 0)
+        b.compressed ? sum + getBlockTokens(b) - (b.summary_tokens || 0) : sum, 0)
       setBlocks(newBlocksData)
       setCompressionMsgFading(false)
       setCompressionMsg({ from: prevTokens, to: newTotalTokens, saved: savedNow })
@@ -256,9 +325,9 @@ export default function App() {
     }
   }
 
-  const totalTokens = Object.values(blocks).reduce((sum, b) => sum + (b.image_tokens || 0), 0)
+  const totalTokens = Object.values(blocks).reduce((sum, b) => sum + getBlockTokens(b), 0)
   const savedTokens = Object.values(blocks).reduce((sum, b) =>
-    b.compressed ? sum + (b.image_tokens || 0) - (b.summary_tokens || 0) : sum, 0)
+    b.compressed ? sum + getBlockTokens(b) - (b.summary_tokens || 0) : sum, 0)
 
   const filteredBlocks = Object.entries(blocks).filter(([, meta]) => {
     const statusOk = statusFilter === "all"
@@ -273,6 +342,13 @@ export default function App() {
   const uncompressedCount = totalCount - compressedCount
   const imageCount = Object.values(blocks).filter(b => b.type === "image").length
   const codeCount = Object.values(blocks).filter(b => b.type === "code").length
+  const pdfCount = Object.values(blocks).filter(b => b.type === "pdf").length
+  const textCount = Object.values(blocks).filter(b => b.type === "text").length
+
+  const blockTooltip = (meta) => {
+    if (meta.compressed) return meta.type === "image" ? "double click to view" : "compressed"
+    return meta.type === "image" ? "click to select · double click to view" : "click to select"
+  }
 
   return (
     <div style={styles.app}>
@@ -297,6 +373,7 @@ export default function App() {
               setBlocks({})
               setPreviews({})
               setSelected([])
+              setPendingFile(null)
               setCompressionMsg(null)
               setCompressionMsgFading(false)
             }}>+ New</button>
@@ -341,7 +418,7 @@ export default function App() {
           {messages.length === 0 && (
             <div style={styles.empty}>
               <div style={styles.emptyTitle}>Lethe</div>
-              <div style={styles.emptySubtitle}>Start a conversation. Upload images or code to begin tracking context.</div>
+              <div style={styles.emptySubtitle}>Start a conversation. Upload images, code, text, or PDFs to begin tracking context.</div>
             </div>
           )}
           {messages.map((msg, i) => (
@@ -353,6 +430,14 @@ export default function App() {
                   style={{ width: 200, height: 140, objectFit: "cover", borderRadius: 10, marginBottom: 6, display: "block", cursor: "pointer" }}
                   onClick={() => setOverlayImage(msg.image)}
                 />
+              )}
+              {msg.attachedFile && (
+                <div style={styles.attachedFileBadge}>
+                  <span style={{ fontSize: 13 }}>
+                    {msg.attachedFile.type === "code" ? "📄" : msg.attachedFile.type === "pdf" ? "📑" : "📝"}
+                  </span>
+                  <span style={{ fontSize: 11, color: "#aaa" }}>{msg.attachedFile.name}</span>
+                </div>
               )}
               <div style={styles.msgContent} className="msg-content">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -371,21 +456,66 @@ export default function App() {
         </div>
 
         <div style={styles.inputArea}>
-          <input type="file" accept="image/*" ref={fileInputRef} style={{ display: "none" }}
+          {/* Hidden file inputs */}
+          <input type="file" accept="image/*" ref={imageInputRef} style={{ display: "none" }}
             onChange={e => {
               const file = e.target.files[0]
+              e.target.value = ""
               if (!file) return
-              setImageFile(file)
               const url = URL.createObjectURL(file)
-              setImagePreview(url)
               setPreviews(prev => ({ ...prev, [file.name]: url }))
+              setPendingFile({ file, type: "image", preview: url })
             }}
           />
+          <input type="file"
+            accept=".py,.js,.jsx,.ts,.tsx,.cpp,.c,.java,.go,.rs,.rb,.swift,.kt,.cs,.html,.css"
+            ref={codeInputRef} style={{ display: "none" }}
+            onChange={e => {
+              const file = e.target.files[0]
+              e.target.value = ""
+              if (!file) return
+              setPendingFile({ file, type: "code" })
+            }}
+          />
+          <input type="file"
+            accept=".txt,.md,.csv,.json,.xml,.yaml,.yml,.log"
+            ref={textInputRef} style={{ display: "none" }}
+            onChange={e => {
+              const file = e.target.files[0]
+              e.target.value = ""
+              if (!file) return
+              setPendingFile({ file, type: "text" })
+            }}
+          />
+          <input type="file" accept=".pdf" ref={pdfInputRef} style={{ display: "none" }}
+            onChange={e => {
+              const file = e.target.files[0]
+              e.target.value = ""
+              if (!file) return
+              const MAX_PDF = 32 * 1024 * 1024
+              if (file.size > MAX_PDF) {
+                alert("PDF must be under 32MB. Please choose a smaller file.")
+                return
+              }
+              setPendingFile({ file, type: "pdf" })
+            }}
+          />
+
           <div style={styles.inputWrapper}>
-            {imagePreview && (
+            {pendingFile && (
               <div style={styles.imagePreviewRow}>
-                <img src={imagePreview} style={styles.imageThumb} />
-                <button style={styles.removeImg} onClick={() => { setImageFile(null); setImagePreview(null) }}>✕</button>
+                {pendingFile.type === "image"
+                  ? <img src={pendingFile.preview} style={styles.imageThumb} />
+                  : <div style={styles.fileChip}>
+                      <span style={{ fontSize: 14 }}>
+                        {pendingFile.type === "code" ? "📄" : pendingFile.type === "pdf" ? "📑" : "📝"}
+                      </span>
+                      <span style={{ fontSize: 11, color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }}>
+                        {pendingFile.file.name}
+                      </span>
+                    </div>
+                }
+                <button style={styles.removeImg} onClick={() => setPendingFile(null)}>✕</button>
               </div>
             )}
             <textarea
@@ -397,9 +527,33 @@ export default function App() {
               rows={1}
             />
             <div style={styles.inputRow}>
-              <div className="upload-btn-wrapper">
-                <button style={styles.uploadBtn} onClick={() => fileInputRef.current.click()}>+</button>
-                <div className="upload-tooltip">Add image</div>
+              {/* Upload button with dropdown menu */}
+              <div ref={uploadWrapperRef} style={{ position: "relative" }}>
+                <button
+                  style={styles.uploadBtn}
+                  onClick={() => setUploadMenuOpen(p => !p)}
+                  title="Attach file"
+                >+</button>
+                {uploadMenuOpen && (
+                  <div style={styles.uploadMenu}>
+                    {[
+                      { type: "image", emoji: "📷", label: "Image", ref: imageInputRef },
+                      { type: "code", emoji: "📄", label: "Code file", ref: codeInputRef },
+                      { type: "text", emoji: "📝", label: "Text file", ref: textInputRef },
+                      { type: "pdf", emoji: "📑", label: "PDF", ref: pdfInputRef },
+                    ].map(item => (
+                      <button
+                        key={item.type}
+                        className="upload-menu-item"
+                        style={styles.uploadMenuItem}
+                        onClick={() => { item.ref.current.click(); setUploadMenuOpen(false) }}
+                      >
+                        <span style={{ fontSize: 14, lineHeight: 1 }}>{item.emoji}</span>
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div style={{ flex: 1 }} />
               <button style={styles.sendBtn} onClick={sendMessage}>Send</button>
@@ -491,15 +645,19 @@ export default function App() {
             {/* Filter pills — only shown when blocks exist */}
             {totalCount > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {/* Status filter row */}
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                   <Pill label={`All ${totalCount}`} active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
                   <Pill label={`Uncompressed ${uncompressedCount}`} active={statusFilter === "uncompressed"} onClick={() => setStatusFilter("uncompressed")} />
                   <Pill label={`Compressed ${compressedCount}`} active={statusFilter === "compressed"} onClick={() => setStatusFilter("compressed")} />
                 </div>
+                {/* Type filter row */}
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                   <Pill label="All types" active={typeFilter === "all"} onClick={() => setTypeFilter("all")} />
                   {imageCount > 0 && <Pill label={`Images ${imageCount}`} active={typeFilter === "image"} onClick={() => setTypeFilter("image")} />}
                   {codeCount > 0 && <Pill label={`Code ${codeCount}`} active={typeFilter === "code"} onClick={() => setTypeFilter("code")} />}
+                  {pdfCount > 0 && <Pill label={`PDFs ${pdfCount}`} active={typeFilter === "pdf"} onClick={() => setTypeFilter("pdf")} />}
+                  {textCount > 0 && <Pill label={`Text ${textCount}`} active={typeFilter === "text"} onClick={() => setTypeFilter("text")} />}
                 </div>
               </div>
             )}
@@ -507,34 +665,48 @@ export default function App() {
             {/* Block list */}
             <div style={viewMode === "tile" ? styles.tileGrid : styles.blockList}>
               {totalCount === 0 && (
-                <div style={styles.emptyBlocks}>No blocks yet. Upload an image or file to start tracking.</div>
+                <div style={styles.emptyBlocks}>No blocks yet. Upload an image, code, text, or PDF to start tracking.</div>
               )}
 
               {/* DETAILED VIEW */}
               {viewMode === "detailed" && filteredBlocks.map(([id, meta]) => (
                 <div
                   key={id}
-                  className="block-tooltip"
-                  data-tooltip={meta.compressed ? "double click to view" : "click to select · double click to view"}
+                  className={`block-tooltip${compressing && compressingIds.includes(id) && meta.type !== "image" ? " compressing-row" : ""}`}
+                  data-tooltip={blockTooltip(meta)}
                   style={{
                     ...styles.blockItem,
                     border: selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
                     opacity: meta.compressed ? 0.6 : 1
                   }}
                   onClick={() => !meta.compressed && toggleSelect(id)}
-                  onDoubleClick={() => previews[id] && setOverlayImage(previews[id])}
+                  onDoubleClick={() => meta.type === "image" && previews[id] && setOverlayImage(previews[id])}
                 >
-                  {meta.type === "image" && (
-                    <BlockThumb
-                      id={id} meta={meta} previews={previews}
-                      isCompressing={compressing && compressingIds.includes(id)}
-                      height={80}
-                    />
+                  {meta.type === "image" ? (
+                    <>
+                      <BlockThumb
+                        id={id} meta={meta} previews={previews}
+                        isCompressing={compressing && compressingIds.includes(id)}
+                        height={80}
+                      />
+                      <div style={styles.blockId}>{meta.id || id}</div>
+                    </>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+                      <FileIcon type={meta.type} compressed={meta.compressed} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={styles.blockId}>{meta.id || id}</div>
+                        {meta.type === "code" && meta.versions && (
+                          <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>
+                            {meta.versions} version{meta.versions !== 1 ? "s" : ""}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   )}
-                  <div style={styles.blockId}>{meta.id || id}</div>
                   <div style={styles.blockMeta}>
                     <span style={styles.blockType}>{meta.type}</span>
-                    <span style={styles.blockTokens}>{(meta.image_tokens || 0).toLocaleString()} tokens</span>
+                    <span style={styles.blockTokens}>{settings.showTokenCounts ? `${getBlockTokens(meta).toLocaleString()} tokens` : "—"}</span>
                   </div>
                   {meta.uploaded_at && <div style={styles.blockTimestamp}>{relativeTime(meta.uploaded_at)}</div>}
                   {meta.compressed && <div style={styles.compressedBadge}>✓ compressed</div>}
@@ -546,23 +718,33 @@ export default function App() {
                 <div
                   key={id}
                   className={`block-tooltip${compressing && compressingIds.includes(id) ? " compressing-row" : ""}`}
-                  data-tooltip={meta.compressed ? "double click to view" : "click to select · double click to view"}
+                  data-tooltip={blockTooltip(meta)}
                   style={{
                     ...styles.listItem,
                     border: selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
                     opacity: meta.compressed ? 0.6 : 1
                   }}
                   onClick={() => !meta.compressed && toggleSelect(id)}
-                  onDoubleClick={() => previews[id] && setOverlayImage(previews[id])}
+                  onDoubleClick={() => meta.type === "image" && previews[id] && setOverlayImage(previews[id])}
                 >
+                  {meta.type !== "image" && (
+                    <FileIcon type={meta.type} compressed={meta.compressed} />
+                  )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11, fontFamily: "'Courier New', monospace", color: "#E8E8E8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {meta.id || id}
                     </div>
+                    {meta.type === "code" && meta.versions && (
+                      <div style={{ fontSize: 10, color: "#555", marginTop: 1 }}>
+                        {meta.versions} version{meta.versions !== 1 ? "s" : ""}
+                      </div>
+                    )}
                     {meta.uploaded_at && <div style={styles.blockTimestamp}>{relativeTime(meta.uploaded_at)}</div>}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
-                    <span style={styles.blockTokens}>{(meta.image_tokens || 0).toLocaleString()}</span>
+                    {settings.showTokenCounts && (
+                      <span style={styles.blockTokens}>{getBlockTokens(meta).toLocaleString()}</span>
+                    )}
                     {meta.compressed && <span style={{ fontSize: 10, color: "#4ECDC4" }}>✓</span>}
                   </div>
                 </div>
@@ -572,8 +754,8 @@ export default function App() {
               {viewMode === "tile" && filteredBlocks.map(([id, meta]) => (
                 <div
                   key={id}
-                  className="block-tooltip tile-block"
-                  data-tooltip={meta.compressed ? "double click to view" : "click to select · double click to view"}
+                  className={`block-tooltip tile-block${compressing && compressingIds.includes(id) && meta.type !== "image" ? " compressing-row" : ""}`}
+                  data-tooltip={blockTooltip(meta)}
                   style={{
                     borderRadius: 8,
                     overflow: "hidden",
@@ -582,14 +764,25 @@ export default function App() {
                     opacity: meta.compressed ? 0.6 : 1
                   }}
                   onClick={() => !meta.compressed && toggleSelect(id)}
-                  onDoubleClick={() => previews[id] && setOverlayImage(previews[id])}
+                  onDoubleClick={() => meta.type === "image" && previews[id] && setOverlayImage(previews[id])}
                 >
-                  {meta.type === "image" && (
+                  {meta.type === "image" ? (
                     <BlockThumb
                       id={id} meta={meta} previews={previews}
                       isCompressing={compressing && compressingIds.includes(id)}
                       square
                     />
+                  ) : (
+                    <div style={{
+                      aspectRatio: "1/1",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: "#161616",
+                      borderRadius: "6px 6px 0 0"
+                    }}>
+                      <FileIcon type={meta.type} compressed={meta.compressed} />
+                    </div>
                   )}
                   <div style={{ padding: "5px 7px", fontSize: 10, color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {meta.id || id}
@@ -724,16 +917,30 @@ const styles = {
   chatArea: { flex: 1, overflowY: "auto", padding: "32px 48px", display: "flex", flexDirection: "column", gap: 24 },
   empty: { margin: "auto", textAlign: "center" },
   emptyTitle: { fontSize: 32, fontWeight: 600, marginBottom: 8, letterSpacing: "0.05em" },
-  emptySubtitle: { fontSize: 14, color: "#888", maxWidth: 360, margin: "0 auto" },
+  emptySubtitle: { fontSize: 14, color: "#888", maxWidth: 400, margin: "0 auto" },
   userMsg: { alignSelf: "flex-end", maxWidth: "70%" },
   assistantMsg: { alignSelf: "flex-start", maxWidth: "70%" },
   msgRole: { fontSize: 11, color: "#888", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" },
   msgContent: { fontSize: 14, lineHeight: 1.6, background: "#1A1A1A", padding: "12px 16px", borderRadius: 10 },
+  attachedFileBadge: { display: "inline-flex", alignItems: "center", gap: 6, background: "#1A1A1A", border: "1px solid #2A2A2A", borderRadius: 6, padding: "4px 8px", marginBottom: 6 },
   inputArea: { padding: "16px 48px 24px", display: "flex", justifyContent: "center" },
   inputWrapper: { width: "100%", maxWidth: 700, background: "#1A1A1A", border: "1px solid #2A2A2A", borderRadius: 16, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 },
   inputRow: { display: "flex", alignItems: "center", gap: 8 },
   input: { flex: 1, background: "transparent", border: "none", color: "#E8E8E8", fontSize: 14, resize: "none", outline: "none", fontFamily: "inherit", padding: "0" },
   uploadBtn: { background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 20, padding: "0 4px", flexShrink: 0 },
+  uploadMenu: {
+    position: "absolute", bottom: "calc(100% + 8px)", left: 0,
+    background: "#1A1A1A", border: "1px solid #2A2A2A", borderRadius: 10,
+    padding: 4, zIndex: 50, minWidth: 148,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+    display: "flex", flexDirection: "column", gap: 1
+  },
+  uploadMenuItem: {
+    background: "none", border: "none", color: "#D0D0D0", fontSize: 13,
+    padding: "8px 12px", textAlign: "left", cursor: "pointer",
+    borderRadius: 6, width: "100%", fontFamily: "inherit",
+    display: "flex", alignItems: "center", gap: 8
+  },
   sendBtn: { background: "#4ECDC4", border: "none", color: "#0F0F0F", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13, flexShrink: 0 },
   panel: { background: "#1A1A1A", borderLeft: "1px solid #2A2A2A", display: "flex", flexDirection: "column", flexShrink: 0, transition: "width 0.2s ease", overflow: "hidden" },
   panelContent: { padding: "16px", gap: 16, display: "flex", flexDirection: "column", overflowY: "auto", height: "100%" },
@@ -766,4 +973,5 @@ const styles = {
   imagePreviewRow: { display: "flex", alignItems: "center", gap: 8, padding: "0 4px" },
   imageThumb: { width: 48, height: 48, objectFit: "cover", borderRadius: 6 },
   removeImg: { background: "#2A2A2A", border: "none", color: "#888", borderRadius: "50%", width: 20, height: 20, cursor: "pointer", fontSize: 10 },
+  fileChip: { display: "flex", alignItems: "center", gap: 6, background: "#2A2A2A", borderRadius: 6, padding: "6px 10px" },
 }

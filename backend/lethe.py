@@ -45,8 +45,8 @@ class ContextSession:
         tokens = 170 * total_tiles + 85
         return tokens
     
-    def send(self, text, image_path=None, code_path=None, code_id=None, auto_rename_images=True, auto_title_chats=True):
-        """Send a message, optionally with an image"""
+    def send(self, text, image_path=None, code_path=None, code_id=None, text_path=None, pdf_path=None, auto_rename_images=True, auto_title_chats=True):
+        """Send a message, optionally with an image, code file, text file, or PDF"""
         content = []
         is_first = len(self.history) == 0
 
@@ -67,6 +67,7 @@ class ContextSession:
             }
         if code_path and code_id:
             new_code = self._read_code(code_path)
+            code_tokens = len(new_code) // 4
 
             if code_id not in self.blocks:
                 self.blocks[code_id] = {
@@ -77,6 +78,7 @@ class ContextSession:
                     "diffs": [],
                     "message_index": len(self.history),
                     "compressed": False,
+                    "code_tokens": code_tokens,
                     "uploaded_at": time.time()
                 }
                 code_content = f"[Code block '{code_id}' - base version]:\n```\n{new_code}\n```"
@@ -86,9 +88,54 @@ class ContextSession:
                 self.blocks[code_id]["diffs"].append(diff)
                 self.blocks[code_id]["path"] = code_path
                 self.blocks[code_id]["base_code"] = new_code
+                self.blocks[code_id]["code_tokens"] = code_tokens
                 code_content = f"[Code block '{code_id}' - updated version]:\n```\n{new_code}\n```\n\n[Changes from previous version]:\n{diff}"
 
             content.append({"type": "text", "text": code_content})
+
+        if text_path:
+            text_id = Path(text_path).name
+            with open(text_path, "r", encoding="utf-8", errors="replace") as f:
+                file_content = f.read()
+            text_tokens = len(file_content) // 4
+            content.append({
+                "type": "text",
+                "text": f"[Text file '{text_id}']:\n{file_content}"
+            })
+            self.blocks[text_id] = {
+                "id": text_id,
+                "type": "text",
+                "path": text_path,
+                "content": file_content,
+                "message_index": len(self.history),
+                "compressed": False,
+                "text_tokens": text_tokens,
+                "uploaded_at": time.time()
+            }
+
+        if pdf_path:
+            pdf_id = Path(pdf_path).name
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            pdf_data = base64.standard_b64encode(pdf_bytes).decode("utf-8")
+            pdf_tokens = len(pdf_bytes) // 6
+            content.append({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": pdf_data
+                }
+            })
+            self.blocks[pdf_id] = {
+                "id": pdf_id,
+                "type": "pdf",
+                "path": pdf_path,
+                "message_index": len(self.history),
+                "compressed": False,
+                "pdf_tokens": pdf_tokens,
+                "uploaded_at": time.time()
+            }
 
         content.append({"type": "text", "text": text})
 
@@ -167,6 +214,10 @@ class ContextSession:
             self.compress_image(block_id)
         elif block_type == "code":
             self._compress_code(block_id)
+        elif block_type == "text":
+            self._compress_text(block_id)
+        elif block_type == "pdf":
+            self._compress_pdf(block_id)
 
     def compress_image(self, block_id):
         if block_id not in self.blocks:
@@ -429,3 +480,146 @@ Be concise. This summary replaces the raw code and all its versions in conversat
         print(f"\n✓ Compressed '{block_id}'")
         print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")
         print(f"\nSummary:\n{summary}")
+
+    def _compress_text(self, block_id):
+        msg_index = self.blocks[block_id]["message_index"]
+        file_content = self.blocks[block_id]["content"]
+        original_tokens = self.blocks[block_id].get("text_tokens", len(file_content) // 4)
+
+        # build transcript
+        transcript = []
+        for i, msg in enumerate(self.history):
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, str):
+                transcript.append(f"[{i}] {role}: {content}")
+            elif isinstance(content, list):
+                for part in content:
+                    if part.get("type") == "text":
+                        transcript.append(f"[{i}] {role}: {part['text'][:300]}")
+
+        transcript_text = "\n".join(transcript)
+
+        summarize_prompt = f"""You are a context compression assistant.
+
+A text file called '{block_id}' was shared in a conversation.
+
+Here is the full conversation transcript:
+{transcript_text}
+
+Here is the text file content (truncated if large):
+{file_content[:4000]}
+
+Write a compact summary using tiered compression:
+- Sections actively discussed: detailed summary with key specifics
+- Sections lightly mentioned: 2-3 sentences
+- Sections never mentioned: 1-sentence label only
+
+Be concise. This summary replaces the raw file content in conversation history."""
+
+        summary_response = self.client.messages.create(
+            model=self.model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": summarize_prompt}]
+        )
+
+        summary = summary_response.content[0].text
+        summary_tokens = int(len(summary) / 4)
+
+        if summary_tokens >= original_tokens:
+            print(f"⚠ Summary ({summary_tokens} tokens) is larger than original ({original_tokens} tokens). Compression not applied.")
+            return
+
+        original_message = self.history[msg_index]
+        new_content = []
+        if isinstance(original_message["content"], list):
+            for part in original_message["content"]:
+                if part.get("type") == "text" and f"[Text file '{block_id}']" in part.get("text", ""):
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[Compressed text '{block_id}']:\n{summary}"
+                    })
+                else:
+                    new_content.append(part)
+        self.history[msg_index]["content"] = new_content
+
+        self.blocks[block_id]["compressed"] = True
+        self.blocks[block_id]["summary"] = summary
+        self.blocks[block_id]["summary_tokens"] = summary_tokens
+
+        tokens_saved = original_tokens - summary_tokens
+        pct = round((tokens_saved / original_tokens) * 100) if original_tokens else 0
+        print(f"\n✓ Compressed '{block_id}'")
+        print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")
+
+    def _compress_pdf(self, block_id):
+        msg_index = self.blocks[block_id]["message_index"]
+        original_tokens = self.blocks[block_id].get("pdf_tokens", 0)
+
+        # build transcript (excluding the PDF document block)
+        transcript = []
+        for i, msg in enumerate(self.history):
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, str):
+                transcript.append(f"[{i}] {role}: {content}")
+            elif isinstance(content, list):
+                for part in content:
+                    if part.get("type") == "text":
+                        transcript.append(f"[{i}] {role}: {part['text'][:300]}")
+                    elif part.get("type") == "document":
+                        transcript.append(f"[{i}] {role}: [PDF: {block_id}]")
+
+        transcript_text = "\n".join(transcript)
+
+        summarize_prompt = f"""You are a context compression assistant.
+
+A PDF called '{block_id}' was shared in a conversation. The AI read it natively during the conversation.
+
+Here is the conversation transcript:
+{transcript_text}
+
+Based on the conversation, write a compact summary of:
+1. What the PDF was about (1-2 sentences)
+2. Key points, sections, or findings that were discussed or referenced
+3. Any conclusions or decisions made based on the PDF content
+
+Be concise. This summary replaces the PDF in conversation history."""
+
+        summary_response = self.client.messages.create(
+            model=self.model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": summarize_prompt}]
+        )
+
+        summary = summary_response.content[0].text
+        summary_tokens = int(len(summary) / 4)
+
+        if original_tokens > 0 and summary_tokens >= original_tokens:
+            print(f"⚠ Summary ({summary_tokens} tokens) is larger than original ({original_tokens} tokens). Compression not applied.")
+            return
+
+        original_message = self.history[msg_index]
+        new_content = []
+        if isinstance(original_message["content"], list):
+            replaced = False
+            for part in original_message["content"]:
+                if not replaced and part.get("type") == "document":
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[Compressed PDF '{block_id}']:\n{summary}"
+                    })
+                    replaced = True
+                else:
+                    new_content.append(part)
+        self.history[msg_index]["content"] = new_content
+
+        self.blocks[block_id]["compressed"] = True
+        self.blocks[block_id]["summary"] = summary
+        self.blocks[block_id]["summary_tokens"] = summary_tokens
+
+        tokens_saved = original_tokens - summary_tokens if original_tokens > 0 else 0
+        pct = round((tokens_saved / original_tokens) * 100) if original_tokens else 0
+        print(f"\n✓ Compressed '{block_id}'")
+        if original_tokens:
+            print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")

@@ -290,3 +290,9 @@ button:active {
 
 /* Gear button hover */
 .gear-btn:hover { color: #E8E8E8 !important; }
+
+/* Upload dropdown menu items */
+.upload-menu-item:hover {
+  background: #252525 !important;
+  opacity: 1 !important;
+}
