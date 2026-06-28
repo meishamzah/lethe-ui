@@ -1,0 +1,19 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/.env
+backend/uploads/
+backend/backend.log
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.oxlintrc.json
+frontend/frontend.log
+frontend/vite.log
+
+# Claude Code
+frontend/.claude/
+
+# General
+.DS_Store
