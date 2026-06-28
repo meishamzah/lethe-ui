@@ -1,10 +1,3 @@
-On point 2 — yes, hosted version means when you eventually deploy Lethe-UI to a server so people can access it at a URL like `lethe.app` without running it locally. For now it's local only, but the README should acknowledge that a hosted version is coming.
-
-Here's the README:
-
----
-
-```markdown
 # Lethe UI
 
 A full-stack chat interface built on top of [Lethe](https://github.com/meishamzah/lethe) — 
@@ -122,8 +115,3 @@ Frontend runs on `http://localhost:5173`
 ## License
 
 MIT
-```
-
----
-
-Want anything changed before you add it to the repo?
