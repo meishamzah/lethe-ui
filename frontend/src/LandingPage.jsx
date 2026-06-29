@@ -71,6 +71,11 @@ export default function LandingPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get("logged_out") === "1") {
+      window.history.replaceState({}, "", "/")
+      return
+    }
     fetch(`${API}/auth/me`, { credentials: "include" })
       .then(r => r.json())
       .then(data => { if (data.authenticated) navigate("/chat", { replace: true }) })
