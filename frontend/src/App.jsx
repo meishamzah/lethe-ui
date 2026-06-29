@@ -252,14 +252,36 @@ export default function App() {
       localStorage.setItem("lethe_guest_id", gid)
     }
     document.cookie = `lethe_guest_id=${gid}; path=/; max-age=31536000; SameSite=Lax`
-    apiFetch("/auth/me").then(r => r.json()).then(data => {
-      if (data.authenticated) {
-        setAuthUser(data)
-        localStorage.removeItem("lethe_guest_id")
-        document.cookie = "lethe_guest_id=; path=/; max-age=0"
-      }
-    }).catch(() => { })
-    fetchChats()
+
+    const params = new URLSearchParams(window.location.search)
+    const authToken = params.get("auth_token")
+
+    if (authToken) {
+      // Clean the token from the URL immediately
+      params.delete("auth_token")
+      window.history.replaceState({}, "", params.toString() ? `?${params.toString()}` : window.location.pathname)
+      // Exchange token for session; pass guest_id so backend can migrate chats
+      apiFetch(`/auth/verify?token=${encodeURIComponent(authToken)}&guest_id=${encodeURIComponent(gid)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.authenticated) {
+            setAuthUser(data)
+            localStorage.removeItem("lethe_guest_id")
+            document.cookie = "lethe_guest_id=; path=/; max-age=0"
+          }
+        })
+        .catch(() => {})
+        .finally(() => fetchChats())
+    } else {
+      apiFetch("/auth/me").then(r => r.json()).then(data => {
+        if (data.authenticated) {
+          setAuthUser(data)
+          localStorage.removeItem("lethe_guest_id")
+          document.cookie = "lethe_guest_id=; path=/; max-age=0"
+        }
+      }).catch(() => { })
+      fetchChats()
+    }
   }, [])
 
   useEffect(() => {

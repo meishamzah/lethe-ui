@@ -1,4 +1,6 @@
 import os
+import time
+import secrets as _secrets
 from flask import Blueprint, redirect, request, session, jsonify, url_for
 from authlib.integrations.flask_client import OAuth
 import flask_login
@@ -9,6 +11,17 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 # Populated by init_oauth() called from app.py after app is created
 oauth = OAuth()
 google = None
+
+# Short-lived tokens: token -> {user_id, guest_id, expires}
+_pending_tokens = {}
+
+def _make_auth_token(user_id, guest_id):
+    token = _secrets.token_urlsafe(32)
+    now = time.time()
+    _pending_tokens[token] = {"user_id": user_id, "guest_id": guest_id, "expires": now + 300}
+    for k in [k for k, v in list(_pending_tokens.items()) if v["expires"] < now]:
+        del _pending_tokens[k]
+    return token
 
 class User(flask_login.UserMixin):
     def __init__(self, user_row):
@@ -95,24 +108,50 @@ def google_callback():
         user_id = database.create_user(google_id, email, display_name, avatar_url)
         database.log_event("user_created", user_id=user_id)
 
-    # Migrate any guest chats to this user
+    # Store guest_id to migrate after the frontend calls /auth/verify
     guest_id = request.cookies.get("lethe_guest_id")
+
+    # Generate a short-lived token; login happens in /auth/verify via apiFetch
+    # so the session cookie is set with proper CORS headers (not via a redirect)
+    auth_token = _make_auth_token(user_id, guest_id)
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    resp = redirect(f"{frontend_url}?auth_token={auth_token}")
+    if guest_id:
+        resp.delete_cookie("lethe_guest_id")
+    return resp
+
+@auth_bp.route("/verify")
+def verify():
+    token = request.args.get("token", "")
+    entry = _pending_tokens.pop(token, None)
+    if not entry or entry["expires"] < time.time():
+        return jsonify({"error": "invalid or expired token"}), 400
+
+    user_id = entry["user_id"]
+    # Accept guest_id from the entry (if cookie was readable) or from the frontend param
+    guest_id = entry.get("guest_id") or request.args.get("guest_id")
+
     if guest_id:
         database.migrate_guest_chats(guest_id, user_id)
         database.log_event("guest_migrated", guest_id=guest_id, user_id=user_id)
 
     row = database.get_user_by_id(user_id)
+    if not row:
+        return jsonify({"error": "user not found"}), 404
+
     user = User(row)
     flask_login.login_user(user, remember=True)
     database.log_event("login", user_id=user_id)
 
-    # Redirect back to the frontend
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
-    resp = redirect(frontend_url)
-    # Clear guest cookie after successful migration
-    if guest_id:
-        resp.delete_cookie("lethe_guest_id")
-    return resp
+    return jsonify({
+        "authenticated": True,
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "plan": user.plan,
+        "api_provider": user.api_provider,
+    })
 
 @auth_bp.route("/logout", methods=["POST"])
 def logout():
