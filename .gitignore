@@ -6,6 +6,7 @@ backend/uploads/
 backend/backend.log
 backend/lethe.db
 backend/..server.log
+backend/.flask_secret
 
 # Node
 frontend/node_modules/

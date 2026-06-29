@@ -14,8 +14,38 @@ def get_db():
 def init_db():
     with get_db() as conn:
         conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          google_id TEXT UNIQUE NOT NULL,
+          email TEXT UNIQUE NOT NULL,
+          display_name TEXT,
+          avatar_url TEXT,
+          plan TEXT DEFAULT 'free',
+          api_key_encrypted TEXT,
+          api_provider TEXT DEFAULT 'anthropic',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+          user_id INTEGER PRIMARY KEY REFERENCES users(id),
+          auto_rename_images BOOLEAN DEFAULT 1,
+          auto_compress_without_asking BOOLEAN DEFAULT 0,
+          auto_compress_threshold INTEGER DEFAULT 80,
+          compression_min_tokens INTEGER DEFAULT 500,
+          show_token_counts BOOLEAN DEFAULT 1,
+          auto_title_chats BOOLEAN DEFAULT 1,
+          show_typing_animation BOOLEAN DEFAULT 1,
+          send_on_enter BOOLEAN DEFAULT 1,
+          default_view_mode TEXT DEFAULT 'detailed',
+          default_status_filter TEXT DEFAULT 'all',
+          panel_open_by_default BOOLEAN DEFAULT 1,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS chats (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          guest_id TEXT,
           title TEXT DEFAULT 'New chat',
           history_json TEXT DEFAULT '[]',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -51,50 +81,167 @@ def init_db():
           diffs TEXT,
           UNIQUE(chat_id, block_id)
         );
+
+        CREATE TABLE IF NOT EXISTS events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_type TEXT,
+          guest_id TEXT,
+          user_id INTEGER,
+          metadata TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
         """)
+
+        # Migrate existing chats table if user_id/guest_id columns are missing
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(chats)").fetchall()]
+        if "user_id" not in cols:
+            conn.execute("ALTER TABLE chats ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+        if "guest_id" not in cols:
+            conn.execute("ALTER TABLE chats ADD COLUMN guest_id TEXT")
+
         conn.commit()
 
-def create_chat(title="New chat"):
+# ── Users ──────────────────────────────────────────────────────────────────────
+
+def create_user(google_id, email, display_name=None, avatar_url=None):
     with get_db() as conn:
-        cursor = conn.execute("INSERT INTO chats (title) VALUES (?)", (title,))
+        cursor = conn.execute(
+            "INSERT INTO users (google_id, email, display_name, avatar_url) VALUES (?,?,?,?)",
+            (google_id, email, display_name, avatar_url))
         conn.commit()
         return cursor.lastrowid
 
-def get_all_chats():
+def get_user_by_google_id(google_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE google_id=?", (google_id,)).fetchone()
+        return dict(row) if row else None
+
+def get_user_by_id(user_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+def update_user(user_id, **fields):
+    if not fields:
+        return
+    cols = ", ".join(f"{k}=?" for k in fields)
+    with get_db() as conn:
+        conn.execute(f"UPDATE users SET {cols} WHERE id=?", (*fields.values(), user_id))
+        conn.commit()
+
+# ── Settings ───────────────────────────────────────────────────────────────────
+
+_SETTINGS_COLS = [
+    "auto_rename_images", "auto_compress_without_asking", "auto_compress_threshold",
+    "compression_min_tokens", "show_token_counts", "auto_title_chats",
+    "show_typing_animation", "send_on_enter", "default_view_mode",
+    "default_status_filter", "panel_open_by_default",
+]
+
+def get_settings(user_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM settings WHERE user_id=?", (user_id,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        # Cast booleans
+        for k in ["auto_rename_images","auto_compress_without_asking","show_token_counts",
+                   "auto_title_chats","show_typing_animation","send_on_enter","panel_open_by_default"]:
+            if k in d:
+                d[k] = bool(d[k])
+        return d
+
+def upsert_settings(user_id, patch):
+    valid = {k: v for k, v in patch.items() if k in _SETTINGS_COLS}
+    if not valid:
+        return
+    with get_db() as conn:
+        existing = conn.execute("SELECT 1 FROM settings WHERE user_id=?", (user_id,)).fetchone()
+        if existing:
+            cols = ", ".join(f"{k}=?" for k in valid)
+            conn.execute(
+                f"UPDATE settings SET {cols}, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                (*valid.values(), user_id))
+        else:
+            cols = ", ".join(valid.keys())
+            placeholders = ", ".join("?" * (len(valid) + 1))
+            conn.execute(
+                f"INSERT INTO settings (user_id, {cols}) VALUES ({placeholders})",
+                (user_id, *valid.values()))
+        conn.commit()
+
+# ── Chats ──────────────────────────────────────────────────────────────────────
+
+def create_chat(title="New chat", user_id=None, guest_id=None):
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO chats (title, user_id, guest_id) VALUES (?,?,?)",
+            (title, user_id, guest_id))
+        conn.commit()
+        return cursor.lastrowid
+
+def get_chats_for_user(user_id):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, title, created_at, updated_at FROM chats ORDER BY updated_at DESC"
-        ).fetchall()
+            "SELECT id, title, created_at, updated_at FROM chats "
+            "WHERE user_id=? ORDER BY updated_at DESC", (user_id,)).fetchall()
         return [dict(r) for r in rows]
+
+def get_chats_for_guest(guest_id):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, title, created_at, updated_at FROM chats "
+            "WHERE guest_id=? ORDER BY updated_at DESC", (guest_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+def migrate_guest_chats(guest_id, user_id):
+    """Reassign all guest chats to a real user on login."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE chats SET user_id=?, guest_id=NULL WHERE guest_id=?",
+            (user_id, guest_id))
+        conn.commit()
 
 def get_chat(chat_id):
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        row = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
         return dict(row) if row else None
 
 def update_chat_title(chat_id, title):
     with get_db() as conn:
         conn.execute(
-            "UPDATE chats SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE chats SET title=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (title, chat_id))
         conn.commit()
 
 def delete_chat(chat_id):
     with get_db() as conn:
-        conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        conn.execute("DELETE FROM chats WHERE id=?", (chat_id,))
         conn.commit()
 
 def touch_chat(chat_id):
     with get_db() as conn:
         conn.execute(
-            "UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (chat_id,))
+            "UPDATE chats SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (chat_id,))
         conn.commit()
+
+# ── Events ─────────────────────────────────────────────────────────────────────
+
+def log_event(event_type, guest_id=None, user_id=None, metadata=None):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO events (event_type, guest_id, user_id, metadata) VALUES (?,?,?,?)",
+            (event_type, guest_id, user_id,
+             json.dumps(metadata) if metadata else None))
+        conn.commit()
+
+# ── History ────────────────────────────────────────────────────────────────────
 
 def save_history(chat_id, history, blocks):
     serialized = _serialize_history(history, blocks)
     with get_db() as conn:
         conn.execute(
-            "UPDATE chats SET history_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE chats SET history_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (serialized, chat_id))
         conn.commit()
 
@@ -105,7 +252,6 @@ def load_history(chat_id):
     return _deserialize_history(chat.get("history_json") or "[]")
 
 def _serialize_history(history, blocks):
-    """Serialize history to JSON, replacing binary blobs with file refs."""
     block_paths = {}
     for bid, meta in blocks.items():
         midx = meta.get("message_index")
@@ -136,7 +282,6 @@ def _serialize_history(history, blocks):
     return json.dumps(result)
 
 def _deserialize_history(history_json):
-    """Deserialize history JSON, re-encoding file refs back to base64."""
     try:
         history = json.loads(history_json)
     except Exception:
@@ -183,10 +328,12 @@ def _deserialize_history(history_json):
             result.append({"role": msg["role"], "content": parts})
     return result
 
+# ── Messages ───────────────────────────────────────────────────────────────────
+
 def save_display_message(chat_id, role, content, image_url=None, metadata=None):
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO messages (chat_id, role, content, image_url, metadata) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO messages (chat_id, role, content, image_url, metadata) VALUES (?,?,?,?,?)",
             (chat_id, role, content,
              image_url,
              json.dumps(metadata) if metadata else None))
@@ -196,7 +343,7 @@ def get_display_messages(chat_id):
     with get_db() as conn:
         rows = conn.execute(
             "SELECT role, content, image_url, metadata FROM messages "
-            "WHERE chat_id = ? ORDER BY created_at",
+            "WHERE chat_id=? ORDER BY created_at",
             (chat_id,)).fetchall()
     result = []
     for r in rows:
@@ -211,11 +358,13 @@ def get_display_messages(chat_id):
         result.append(msg)
     return result
 
+# ── Blocks ─────────────────────────────────────────────────────────────────────
+
 def upsert_block(chat_id, block_id, meta):
     diffs_json = json.dumps(meta.get("diffs", []))
     with get_db() as conn:
         existing = conn.execute(
-            "SELECT id FROM blocks WHERE chat_id = ? AND block_id = ?",
+            "SELECT id FROM blocks WHERE chat_id=? AND block_id=?",
             (chat_id, block_id)).fetchone()
         if existing:
             conn.execute("""
@@ -264,8 +413,9 @@ def get_blocks_for_chat(chat_id):
             "SELECT * FROM blocks WHERE chat_id=?", (chat_id,)).fetchall()
         return [dict(r) for r in rows]
 
+# ── Session reconstruction ─────────────────────────────────────────────────────
+
 def reconstruct_session(chat_id, client):
-    """Rebuild a ContextSession from DB — called on cache miss after server restart."""
     from lethe import ContextSession
     session = ContextSession(client=client)
     session.history = load_history(chat_id)

@@ -3,7 +3,10 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import SettingsModal from "./Settings"
 
-const API = "http://127.0.0.1:5000"
+const API = "http://localhost:5000"
+
+const apiFetch = (path, opts = {}) =>
+  fetch(`${API}${path}`, { credentials: "include", ...opts })
 
 const DEFAULT_SETTINGS = {
   autoRenameImages: true,
@@ -179,13 +182,16 @@ export default function App() {
   const uploadWrapperRef = useRef(null)
   const [toasts, setToasts] = useState([])
   const [flashingBlocks, setFlashingBlocks] = useState([])
+  const [authUser, setAuthUser] = useState(null)
+  const [sentCount, setSentCount] = useState(0)
+  const [nudgeDismissed, setNudgeDismissed] = useState(false)
 
   // ── Persistence: load chats on mount ──────────────────────────────────────
 
   const switchToChat = async (id) => {
     setActiveChatId(id)
     try {
-      const res = await fetch(`${API}/switch_chat/${id}`, { method: "POST" })
+      const res = await apiFetch(`/switch_chat/${id}`, { method: "POST" })
       const data = await res.json()
 
       setMessages((data.messages || []).map(msg => ({
@@ -217,14 +223,19 @@ export default function App() {
 
   const fetchChats = async (retries = 5) => {
     try {
-      const res = await fetch(`${API}/chats`)
+      const res = await apiFetch("/chats")
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       const list = data.chats || []
-      setChats(list)
       setChatsLoading(false)
       if (list.length > 0) {
+        setChats(list)
         await switchToChat(list[0].id)
+      } else {
+        const ncRes = await apiFetch("/new_chat", { method: "POST" })
+        const ncData = await ncRes.json()
+        setChats([{ id: ncData.chat_id, title: "New Chat" }])
+        setActiveChatId(ncData.chat_id)
       }
     } catch (e) {
       console.error("Failed to fetch chats:", e.message)
@@ -237,6 +248,19 @@ export default function App() {
   }
 
   useEffect(() => {
+    let gid = localStorage.getItem("lethe_guest_id")
+    if (!gid) {
+      gid = "guest_" + Math.random().toString(36).slice(2, 18)
+      localStorage.setItem("lethe_guest_id", gid)
+    }
+    document.cookie = `lethe_guest_id=${gid}; path=/; max-age=31536000; SameSite=Lax`
+    apiFetch("/auth/me").then(r => r.json()).then(data => {
+      if (data.authenticated) {
+        setAuthUser(data)
+        localStorage.removeItem("lethe_guest_id")
+        document.cookie = "lethe_guest_id=; path=/; max-age=0"
+      }
+    }).catch(() => {})
     fetchChats()
   }, [])
 
@@ -272,7 +296,7 @@ export default function App() {
 
   const handleClearFiles = async () => {
     try {
-      const res = await fetch(`${API}/reset`, { method: "POST" })
+      const res = await apiFetch("/reset", { method: "POST" })
       const data = await res.json()
       setChats([{ id: data.chat_id, title: "New Chat" }])
       setActiveChatId(data.chat_id)
@@ -286,7 +310,7 @@ export default function App() {
 
   const handleResetSession = async () => {
     try {
-      const res = await fetch(`${API}/reset`, { method: "POST" })
+      const res = await apiFetch("/reset", { method: "POST" })
       const data = await res.json()
       setChats([{ id: data.chat_id, title: "New Chat" }])
       setActiveChatId(data.chat_id)
@@ -303,7 +327,7 @@ export default function App() {
   }
 
   const fetchStatus = async () => {
-    const res = await fetch(`${API}/status`)
+    const res = await apiFetch("/status")
     const data = await res.json()
     setBlocks(data.blocks)
   }
@@ -334,8 +358,9 @@ export default function App() {
       formData.append("auto_rename_images", settings.autoRenameImages ? "1" : "0")
       formData.append("auto_title_chats", settings.autoTitleChats ? "1" : "0")
 
-      const res = await fetch(`${API}/send`, { method: "POST", body: formData })
+      const res = await apiFetch("/send", { method: "POST", body: formData })
       const data = await res.json()
+      setSentCount(prev => prev + 1)
 
       if (data.chat_title && settings.autoTitleChats) {
         setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, title: data.chat_title } : c))
@@ -404,14 +429,14 @@ export default function App() {
     setCompressing(true)
     try {
       const [compressData] = await Promise.all([
-        fetch(`${API}/compress`, {
+        apiFetch("/compress", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ block_ids: eligibleIds })
         }).then(r => r.json()),
         new Promise(resolve => setTimeout(resolve, 2000))
       ])
-      const statusRes = await fetch(`${API}/status`)
+      const statusRes = await apiFetch("/status")
       const statusData = await statusRes.json()
       setBlocks(statusData.blocks)
 
@@ -477,7 +502,7 @@ export default function App() {
             <span style={styles.logo}>Lethe</span>
             <button style={styles.newChat} onClick={async () => {
               try {
-                const res = await fetch(`${API}/new_chat`, { method: "POST" })
+                const res = await apiFetch("/new_chat", { method: "POST" })
                 const data = await res.json()
                 setChats(prev => [{ id: data.chat_id, title: "New Chat" }, ...prev])
                 setActiveChatId(data.chat_id)
@@ -518,7 +543,7 @@ export default function App() {
                 title="Delete chat"
                 onClick={async (e) => {
                   e.stopPropagation()
-                  const res = await fetch(`${API}/chats/${chat.id}`, { method: "DELETE" })
+                  const res = await apiFetch(`/chats/${chat.id}`, { method: "DELETE" })
                   const data = await res.json()
                   setChats(prev => prev.filter(c => c.id !== chat.id))
                   if (chat.id === activeChatId) {
@@ -542,11 +567,37 @@ export default function App() {
         </div>
         <div style={styles.sidebarBottom}>
           <div style={styles.userRow}>
-            <div style={styles.avatar}>AH</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={styles.userName}>Ameer Hamzah</div>
-              <div style={styles.planBadge}>Free</div>
-            </div>
+            {authUser ? (
+              <>
+                <div style={styles.avatar}>
+                  {authUser.avatar_url
+                    ? <img src={authUser.avatar_url} style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />
+                    : (authUser.display_name || "?").slice(0, 2).toUpperCase()
+                  }
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={styles.userName}>{authUser.display_name || authUser.email}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={styles.planBadge}>{authUser.plan === "pro" ? "Pro" : "Free"}</div>
+                    <button
+                      style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 10, padding: 0 }}
+                      onClick={() => apiFetch("/auth/logout", { method: "POST" }).then(() => { setAuthUser(null); setSentCount(0); setNudgeDismissed(false) }).catch(() => {})}
+                    >Sign out</button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ ...styles.avatar, background: "#2A2A2A", color: "#666", fontSize: 13 }}>?</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={styles.userName}>Guest</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={styles.planBadge}>Free</div>
+                    <a href={`${API}/auth/google`} style={{ fontSize: 10, color: "#4ECDC4", textDecoration: "none" }}>Log in →</a>
+                  </div>
+                </div>
+              </>
+            )}
             <button style={styles.gearBtn} onClick={() => setShowSettings(true)} title="Settings">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/>
@@ -564,6 +615,36 @@ export default function App() {
             <div style={styles.empty}>
               <div style={styles.emptyTitle}>Lethe</div>
               <div style={styles.emptySubtitle}>Start a conversation. Upload images, code, text, or PDFs to begin tracking context.</div>
+            </div>
+          )}
+          {sentCount >= 4 && !authUser && !nudgeDismissed && (
+            <div style={{
+              background: "linear-gradient(135deg, #1a2a2a 0%, #1A2520 100%)",
+              border: "1px solid rgba(78,205,196,0.25)",
+              borderRadius: 10,
+              padding: "12px 14px",
+              marginBottom: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexShrink: 0
+            }}>
+              <span style={{ fontSize: 16 }}>✨</span>
+              <span style={{ fontSize: 12, color: "#aaa", flex: 1, lineHeight: 1.5 }}>
+                You&apos;re chatting as a guest. <strong style={{ color: "#d0d0d0" }}>Log in with Google</strong> to save chats and sync across devices — it&apos;s free.
+              </span>
+              <a
+                href={`${API}/auth/google`}
+                style={{
+                  background: "#4ECDC4", color: "#111", fontSize: 11, fontWeight: 600,
+                  padding: "5px 10px", borderRadius: 6, textDecoration: "none",
+                  flexShrink: 0, whiteSpace: "nowrap"
+                }}
+              >Log in</a>
+              <button
+                style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 13, padding: "0 2px", flexShrink: 0 }}
+                onClick={() => setNudgeDismissed(true)}
+              >✕</button>
             </div>
           )}
           {messages.map((msg, i) => (
