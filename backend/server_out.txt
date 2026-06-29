@@ -1,0 +1,45 @@
+ * Serving Flask app 'app'
+ * Debug mode: on
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+Press CTRL+C to quit
+127.0.0.1 - - [28/Jun/2026 20:39:21] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:39:26] "GET /auth/google HTTP/1.1" 302 -
+127.0.0.1 - - [28/Jun/2026 20:40:39] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:39] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:39] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:39] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:40] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:41] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:42] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:43] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:43] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:45] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:45] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:45] "GET /auth/google HTTP/1.1" 302 -
+127.0.0.1 - - [28/Jun/2026 20:40:45] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:40:48] "GET /auth/google HTTP/1.1" 302 -
+127.0.0.1 - - [28/Jun/2026 20:57:36] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:36] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:36] "POST /new_chat HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:36] "POST /new_chat HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:37] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:37] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:37] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:38] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:38] "POST /switch_chat/10 HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:38] "POST /switch_chat/10 HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:38] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:38] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:38] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:38] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:39] "POST /switch_chat/10 HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:39] "POST /switch_chat/10 HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:40] "GET /auth/google HTTP/1.1" 302 -
+127.0.0.1 - - [28/Jun/2026 20:57:48] "GET /auth/google/callback?state=HDm9f326FMOu4EC64IJXPFFcQck8KQ&iss=https://accounts.google.com&code=4/0AdkVLPwYW1H3GjQZ4Upg0pCnZUCbVf7lr0aO-eE9aCPnr3DxBqwOTC_0vJEkVq3U0p2FDg&scope=email+profile+https://www.googleapis.com/auth/userinfo.profile+https://www.googleapis.com/auth/userinfo.email+openid&authuser=1&prompt=consent HTTP/1.1" 302 -
+127.0.0.1 - - [28/Jun/2026 20:57:48] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:48] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:48] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:49] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:49] "POST /switch_chat/10 HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 20:57:49] "POST /switch_chat/10 HTTP/1.1" 200 -

@@ -1,0 +1,8 @@
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+Press CTRL+C to quit
+127.0.0.1 - - [28/Jun/2026 18:58:23] "GET /auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 18:58:23] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 18:58:30] "GET /chats HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 18:58:39] "POST /new_chat HTTP/1.1" 200 -
+127.0.0.1 - - [28/Jun/2026 18:58:39] "GET /chats HTTP/1.1" 200 -
