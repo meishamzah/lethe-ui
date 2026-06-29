@@ -666,9 +666,7 @@ export default function App() {
                       onClick={async () => {
                         try { await apiFetch("/auth/logout", { method: "POST" }) } catch { }
                         localStorage.clear()
-                        const newGid = "guest_" + Math.random().toString(36).slice(2, 18)
-                        localStorage.setItem("lethe_guest_id", newGid)
-                        document.cookie = `lethe_guest_id=${newGid}; path=/; max-age=31536000; SameSite=Lax`
+                        document.cookie = "lethe_guest_id=; path=/; max-age=0; SameSite=Lax"
                         window.location.href = "/"
                       }}
                     >Sign out</button>
