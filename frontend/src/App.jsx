@@ -178,6 +178,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false)
   const uploadWrapperRef = useRef(null)
+  const textareaRef = useRef(null)
   const [toasts, setToasts] = useState([])
   const [flashingBlocks, setFlashingBlocks] = useState([])
   const [authUser, setAuthUser] = useState(null)
@@ -368,6 +369,7 @@ export default function App() {
     }
     setMessages(prev => [...prev, userMsg])
     setInput("")
+    if (textareaRef.current) textareaRef.current.style.height = "auto"
     setPendingFile(null)
     setLoading(true)
     try {
@@ -414,6 +416,22 @@ export default function App() {
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       if (settings.sendOnEnter || e.ctrlKey) { e.preventDefault(); sendMessage() }
+    }
+  }
+
+  const handlePaste = (e) => {
+    const files = e.clipboardData?.files
+    if (files && files.length > 0) {
+      const file = files[0]
+      if (file.type.startsWith("image/")) {
+        e.preventDefault()
+        const url = URL.createObjectURL(file)
+        setPreviews(prev => ({ ...prev, [file.name]: url }))
+        setPendingFile({ file, type: "image", preview: url })
+      } else if (/\.(txt|md|csv|json|xml|yaml|yml|log)$/i.test(file.name)) {
+        e.preventDefault()
+        setPendingFile({ file, type: "text" })
+      }
     }
   }
 
@@ -645,7 +663,9 @@ export default function App() {
                     <div style={styles.planBadge}>{authUser.plan === "pro" ? "Pro" : "Free"}</div>
                     <button
                       style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 10, padding: 0 }}
-                      onClick={() => apiFetch("/auth/logout", { method: "POST" }).then(() => { setAuthUser(null); setSentCount(0); setNudgeDismissed(false) }).catch(() => { })}
+                      onClick={() => apiFetch("/auth/logout", { method: "POST" })
+                        .then(() => { localStorage.clear(); window.location.reload() })
+                        .catch(() => window.location.reload())}
                     >Sign out</button>
                   </div>
                 </div>
@@ -654,10 +674,10 @@ export default function App() {
               <>
                 <div style={{ ...styles.avatar, background: "#2A2A2A", color: "#666", fontSize: 13 }}>?</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={styles.userName}>Guest</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={styles.planBadge}>Free</div>
-                    <a href={`${API}/auth/google`} style={{ fontSize: 10, color: "#4ECDC4", textDecoration: "none" }}>Log in →</a>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <span style={styles.userName}>Guest</span>
+                    <span style={{ fontSize: 12, color: "#444" }}>·</span>
+                    <a href={`${API}/auth/google`} style={{ fontSize: 12, color: "#4ECDC4", textDecoration: "none", fontWeight: 500 }}>Log in</a>
                   </div>
                 </div>
               </>
@@ -743,45 +763,52 @@ export default function App() {
                   justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
                   animation: "fadeIn 0.15s ease"
                 }}>
-                  <button
-                    className="action-btn"
-                    title="Copy"
-                    style={styles.actionBtn}
-                    onClick={() => handleCopy(msg.content, i)}
-                  >
-                    {copiedMsgIdx === i ? (
-                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <path d="M2 7l4 4 6-7" stroke="#4ECDC4" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    ) : (
-                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <rect x="1" y="4" width="8" height="9" rx="1" stroke="currentColor" strokeWidth="1.3"/>
-                        <path d="M4 4V3a1 1 0 011-1h7a1 1 0 011 1v8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                      </svg>
-                    )}
-                  </button>
-                  {msg.role === "assistant" && i === messages.length - 1 && (
-                    <button className="action-btn" title="Retry" style={styles.actionBtn} onClick={handleRetry}>
-                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <path d="M13 7A6 6 0 112 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                        <path d="M13 1.5v5H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
+                  <div className="action-tooltip-wrap" data-tooltip="Copy">
+                    <button
+                      className="action-btn"
+                      style={styles.actionBtn}
+                      onClick={() => handleCopy(msg.content, i)}
+                    >
+                      {copiedMsgIdx === i ? (
+                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                          <path d="M2 7l4 4 6-7" stroke="#4ECDC4" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      ) : (
+                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                          <rect x="1" y="4" width="8" height="9" rx="1" stroke="currentColor" strokeWidth="1.3"/>
+                          <path d="M4 4V3a1 1 0 011-1h7a1 1 0 011 1v8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                        </svg>
+                      )}
                     </button>
+                  </div>
+                  {msg.role === "assistant" && i === messages.length - 1 && (
+                    <div className="action-tooltip-wrap" data-tooltip="Retry">
+                      <button className="action-btn" style={styles.actionBtn} onClick={handleRetry}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="1 4 1 10 7 10"/>
+                          <path d="M3.51 15a9 9 0 1 0 .49-4.5"/>
+                        </svg>
+                      </button>
+                    </div>
                   )}
                   {msg.role === "assistant" && (
                     <>
-                      <button className="action-btn" title="Good response" style={styles.actionBtn} onClick={() => {}}>
-                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                          <path d="M5 6.5L6.5 2l1 1v4h3.5L10 12H4.5V6.5H5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-                          <rect x="1.5" y="6.5" width="3" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
-                        </svg>
-                      </button>
-                      <button className="action-btn" title="Bad response" style={styles.actionBtn} onClick={() => {}}>
-                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                          <path d="M9 7.5L7.5 12l-1-1V7.5H3L4 2h6v5.5H9z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
-                          <rect x="10" y="2" width="3" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
-                        </svg>
-                      </button>
+                      <div className="action-tooltip-wrap" data-tooltip="Helpful">
+                        <button className="action-btn" style={styles.actionBtn} onClick={() => {}}>
+                          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                            <path d="M5 6.5L6.5 2l1 1v4h3.5L10 12H4.5V6.5H5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                            <rect x="1.5" y="6.5" width="3" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="action-tooltip-wrap" data-tooltip="Not helpful">
+                        <button className="action-btn" style={styles.actionBtn} onClick={() => {}}>
+                          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                            <path d="M9 7.5L7.5 12l-1-1V7.5H3L4 2h6v5.5H9z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                            <rect x="10" y="2" width="3" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+                          </svg>
+                        </button>
+                      </div>
                     </>
                   )}
                 </div>
@@ -902,10 +929,16 @@ export default function App() {
               </div>
             )}
             <textarea
-              style={styles.input}
+              ref={textareaRef}
+              style={{ ...styles.input, maxHeight: 200, overflowY: "auto" }}
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={e => {
+                setInput(e.target.value)
+                e.target.style.height = "auto"
+                e.target.style.height = e.target.scrollHeight + "px"
+              }}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               placeholder="Message Lethe..."
               rows={1}
             />
@@ -952,7 +985,7 @@ export default function App() {
 
             {/* Panel title + view mode icons */}
             <div style={styles.panelTitleRow}>
-              <span style={styles.panelTitle}>Context</span>
+              <span style={styles.panelTitle}>Context Panel</span>
               <div style={{ display: "flex", gap: 2 }}>
                 <button
                   title="List view"
@@ -1328,7 +1361,7 @@ const styles = {
   empty: { margin: "auto", textAlign: "center" },
   emptyTitle: { fontSize: 32, fontWeight: 600, marginBottom: 8, letterSpacing: "0.05em" },
   emptySubtitle: { fontSize: 14, color: "#888", maxWidth: 400, margin: "0 auto" },
-  userMsg: { alignSelf: "flex-end", maxWidth: "70%" },
+  userMsg: { alignSelf: "flex-end", maxWidth: "70%", width: "fit-content", minWidth: 80 },
   assistantMsg: { alignSelf: "flex-start", maxWidth: "70%" },
   msgRole: { fontSize: 11, color: "#888", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" },
   msgContent: { fontSize: 14, lineHeight: 1.6, background: "#1A1A1A", padding: "12px 16px", borderRadius: 10 },
