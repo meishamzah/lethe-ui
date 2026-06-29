@@ -34,9 +34,20 @@ def _load_or_create_secret():
     return key
 
 app.secret_key = _load_or_create_secret()
+
+# On Railway (HTTPS), cross-origin cookies require SameSite=None + Secure.
+# Detected via RAILWAY_ENVIRONMENT env var which Railway sets automatically.
+_production = bool(os.getenv("RAILWAY_ENVIRONMENT"))
+if _production:
+    app.config["SESSION_COOKIE_SAMESITE"] = "None"
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["REMEMBER_COOKIE_SAMESITE"] = "None"
+    app.config["REMEMBER_COOKIE_SECURE"] = True
+
+_frontend_url = os.getenv("FRONTEND_URL", "")
 CORS(app, supports_credentials=True,
      origins=["http://localhost:5173", "http://127.0.0.1:5173",
-               os.getenv("FRONTEND_URL", "")])
+               _frontend_url] if _frontend_url else ["http://localhost:5173", "http://127.0.0.1:5173"])
 
 # ── Flask-Login ─────────────────────────────────────────────────────────────────
 

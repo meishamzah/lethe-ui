@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import SettingsModal from "./Settings"
 
-const API = "http://localhost:5000"
+const API = import.meta.env.VITE_API_URL || "http://localhost:5000"
 
 const apiFetch = (path, opts = {}) =>
   fetch(`${API}${path}`, { credentials: "include", ...opts })
