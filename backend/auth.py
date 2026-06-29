@@ -1,7 +1,7 @@
 import os
 import time
 import secrets as _secrets
-from flask import Blueprint, redirect, request, session, jsonify, url_for
+from flask import Blueprint, redirect, request, session, jsonify, url_for, current_app
 from authlib.integrations.flask_client import OAuth
 import flask_login
 import db as database
@@ -157,10 +157,14 @@ def verify():
 def logout():
     user_id = flask_login.current_user.id if flask_login.current_user.is_authenticated else None
     flask_login.logout_user()
-    session.clear()
+    # Do NOT call session.clear() here — it wipes flask_login's _remember="clear"
+    # signal before its after_request hook can delete the remember_token cookie.
     if user_id:
         database.log_event("logout", user_id=user_id)
-    return jsonify({"ok": True})
+    resp = jsonify({"ok": True})
+    cookie_name = current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token")
+    resp.delete_cookie(cookie_name, path="/")
+    return resp
 
 @auth_bp.route("/me")
 def me():
