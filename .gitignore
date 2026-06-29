@@ -4,6 +4,8 @@ backend/__pycache__/
 backend/.env
 backend/uploads/
 backend/backend.log
+backend/lethe.db
+backend/..server.log
 
 # Node
 frontend/node_modules/

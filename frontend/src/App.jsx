@@ -128,6 +128,25 @@ function Pill({ label, active, onClick }) {
   )
 }
 
+function Toast({ message, onDismiss }) {
+  return (
+    <div style={{
+      background: "#1A1A1A", border: "1px solid rgba(200,140,0,0.4)",
+      borderRadius: 10, padding: "12px 14px",
+      display: "flex", alignItems: "flex-start", gap: 10,
+      maxWidth: 340, boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+      animation: "fadeIn 0.2s ease"
+    }}>
+      <span style={{ fontSize: 15, flexShrink: 0, lineHeight: 1.4, color: "#c8a020" }}>⚠</span>
+      <span style={{ fontSize: 12, lineHeight: 1.5, flex: 1, color: "#D0D0D0" }}>{message}</span>
+      <button
+        style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 12, flexShrink: 0, padding: 0, lineHeight: 1.4 }}
+        onClick={onDismiss}
+      >✕</button>
+    </div>
+  )
+}
+
 export default function App() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState("")
@@ -143,8 +162,9 @@ export default function App() {
   const textInputRef = useRef(null)
   const pdfInputRef = useRef(null)
   const [previews, setPreviews] = useState({})
-  const [chats, setChats] = useState([{ id: 1, title: "New Chat" }])
-  const [activeChatId, setActiveChatId] = useState(1)
+  const [chats, setChats] = useState([])
+  const [activeChatId, setActiveChatId] = useState(null)
+  const [chatsLoading, setChatsLoading] = useState(true)
   const [compressing, setCompressing] = useState(false)
   const [compressionMsg, setCompressionMsg] = useState(null)
   const [compressingIds, setCompressingIds] = useState([])
@@ -157,6 +177,68 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false)
   const uploadWrapperRef = useRef(null)
+  const [toasts, setToasts] = useState([])
+  const [flashingBlocks, setFlashingBlocks] = useState([])
+
+  // ── Persistence: load chats on mount ──────────────────────────────────────
+
+  const switchToChat = async (id) => {
+    setActiveChatId(id)
+    try {
+      const res = await fetch(`${API}/switch_chat/${id}`, { method: "POST" })
+      const data = await res.json()
+
+      setMessages((data.messages || []).map(msg => ({
+        role: msg.role,
+        content: msg.content,
+        image: msg.image_url ? `${API}${msg.image_url}` : null,
+        attachedFile: msg.attached_file || null
+      })))
+
+      const safeBlocks = data.blocks || {}
+      setBlocks(safeBlocks)
+
+      const newPreviews = {}
+      Object.entries(safeBlocks).forEach(([bid, meta]) => {
+        if (meta.type === "image" && meta.path) {
+          newPreviews[bid] = `${API}/${meta.path.replace(/\\/g, "/")}`
+        }
+      })
+      setPreviews(newPreviews)
+
+      setSelected([])
+      setPendingFile(null)
+      setCompressionMsg(null)
+      setCompressionMsgFading(false)
+    } catch (e) {
+      console.error("Failed to switch chat", e)
+    }
+  }
+
+  const fetchChats = async (retries = 5) => {
+    try {
+      const res = await fetch(`${API}/chats`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      const list = data.chats || []
+      setChats(list)
+      setChatsLoading(false)
+      if (list.length > 0) {
+        await switchToChat(list[0].id)
+      }
+    } catch (e) {
+      console.error("Failed to fetch chats:", e.message)
+      if (retries > 0) {
+        setTimeout(() => fetchChats(retries - 1), 1500)
+      } else {
+        setChatsLoading(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    fetchChats()
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -189,7 +271,12 @@ export default function App() {
   const handleClearHistory = () => setMessages([])
 
   const handleClearFiles = async () => {
-    try { await fetch(`${API}/reset`, { method: "POST" }) } catch {}
+    try {
+      const res = await fetch(`${API}/reset`, { method: "POST" })
+      const data = await res.json()
+      setChats([{ id: data.chat_id, title: "New Chat" }])
+      setActiveChatId(data.chat_id)
+    } catch {}
     setBlocks({})
     setPreviews({})
     setSelected([])
@@ -198,10 +285,14 @@ export default function App() {
   }
 
   const handleResetSession = async () => {
-    try { await fetch(`${API}/reset`, { method: "POST" }) } catch {}
-    const id = Date.now()
-    setChats([{ id, title: "New Chat" }])
-    setActiveChatId(id)
+    try {
+      const res = await fetch(`${API}/reset`, { method: "POST" })
+      const data = await res.json()
+      setChats([{ id: data.chat_id, title: "New Chat" }])
+      setActiveChatId(data.chat_id)
+    } catch {
+      setChats([{ id: Date.now(), title: "New Chat" }])
+    }
     setMessages([])
     setBlocks({})
     setPreviews({})
@@ -279,6 +370,12 @@ export default function App() {
     }
   }
 
+  const addToast = (message) => {
+    const id = Date.now() + Math.random()
+    setToasts(prev => [...prev, { id, message }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000)
+  }
+
   const toggleSelect = (id) => {
     setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
@@ -293,31 +390,51 @@ export default function App() {
   const confirmCompress = async () => {
     setShowConfirm(false)
     const eligibleIds = selected.filter(id => getBlockTokens(blocks[id]) >= settings.compressionMinTokens)
+    const tooSmallIds = selected.filter(id => getBlockTokens(blocks[id]) < settings.compressionMinTokens)
+
+    for (const id of tooSmallIds) {
+      const tokens = getBlockTokens(blocks[id])
+      addToast(`'${id}' wasn't compressed — it's only ${tokens.toLocaleString()} tokens. Compressing a file this small would likely increase token usage. No changes were made.`)
+      setFlashingBlocks(prev => [...prev, id])
+      setTimeout(() => setFlashingBlocks(prev => prev.filter(bid => bid !== id)), 1500)
+    }
+
     if (eligibleIds.length === 0) { setSelected([]); return }
     setCompressingIds(eligibleIds)
     setCompressing(true)
-    const prevTokens = Object.values(blocks).reduce((sum, b) => sum + getBlockTokens(b), 0)
     try {
-      await Promise.all([
+      const [compressData] = await Promise.all([
         fetch(`${API}/compress`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ block_ids: eligibleIds })
-        }),
+        }).then(r => r.json()),
         new Promise(resolve => setTimeout(resolve, 2000))
       ])
       const statusRes = await fetch(`${API}/status`)
       const statusData = await statusRes.json()
-      const newBlocksData = statusData.blocks
-      const newTotalTokens = Object.values(newBlocksData).reduce((sum, b) =>
-        sum + (b.compressed ? (b.summary_tokens || 0) : getBlockTokens(b)), 0)
-      const savedNow = Object.values(newBlocksData).reduce((sum, b) =>
-        b.compressed ? sum + getBlockTokens(b) - (b.summary_tokens || 0) : sum, 0)
-      setBlocks(newBlocksData)
-      setCompressionMsgFading(false)
-      setCompressionMsg({ from: prevTokens, to: newTotalTokens, saved: savedNow })
-      setTimeout(() => setCompressionMsgFading(true), 3600)
-      setTimeout(() => { setCompressionMsg(null); setCompressionMsgFading(false) }, 4000)
+      setBlocks(statusData.blocks)
+
+      const results = compressData.results || []
+      for (const result of results) {
+        if (!result.compressed && result.reason === "summary_larger_than_original") {
+          const orig = (result.original_tokens || 0).toLocaleString()
+          const summ = (result.summary_tokens || 0).toLocaleString()
+          addToast(`'${result.block_id}' wasn't compressed — the summary (${summ} tokens) was larger than the original (${orig} tokens). This usually happens with small files. No changes were made.`)
+          setFlashingBlocks(prev => [...prev, result.block_id])
+          setTimeout(() => setFlashingBlocks(prev => prev.filter(bid => bid !== result.block_id)), 1500)
+        }
+      }
+
+      const succeeded = results.filter(r => r.compressed)
+      if (succeeded.length > 0) {
+        const batchOriginal = succeeded.reduce((sum, r) => sum + (r.original_tokens || 0), 0)
+        const batchSummary = succeeded.reduce((sum, r) => sum + (r.summary_tokens || 0), 0)
+        setCompressionMsgFading(false)
+        setCompressionMsg({ from: batchOriginal, to: batchSummary, saved: batchOriginal - batchSummary })
+        setTimeout(() => setCompressionMsgFading(true), 3600)
+        setTimeout(() => { setCompressionMsg(null); setCompressionMsgFading(false) }, 4000)
+      }
     } finally {
       setCompressing(false)
       setCompressingIds([])
@@ -362,12 +479,10 @@ export default function App() {
               try {
                 const res = await fetch(`${API}/new_chat`, { method: "POST" })
                 const data = await res.json()
-                setChats(prev => [...prev, { id: data.chat_id, title: "New Chat" }])
+                setChats(prev => [{ id: data.chat_id, title: "New Chat" }, ...prev])
                 setActiveChatId(data.chat_id)
               } catch {
-                const fallbackId = Date.now()
-                setChats(prev => [...prev, { id: fallbackId, title: "New Chat" }])
-                setActiveChatId(fallbackId)
+                console.error("Failed to create new chat")
               }
               setMessages([])
               setBlocks({})
@@ -381,17 +496,47 @@ export default function App() {
           <div style={styles.sidebarSection}>Recents</div>
         </div>
         <div style={styles.sidebarChatScroll}>
-          {chats.slice().reverse().map(chat => (
+          {chatsLoading && (
+            <div style={{ fontSize: 11, color: "#555", padding: "6px 8px" }}>Connecting…</div>
+          )}
+          {chats.map(chat => (
             <div
               key={chat.id}
               style={{
                 ...styles.sidebarItem,
                 background: chat.id === activeChatId ? "#2A2A2A" : "transparent",
-                color: chat.id === activeChatId ? "#E8E8E8" : "#aaa"
+                color: chat.id === activeChatId ? "#E8E8E8" : "#aaa",
+                display: "flex", alignItems: "center", gap: 4
               }}
-              onClick={() => setActiveChatId(chat.id)}
+              onClick={() => { if (chat.id !== activeChatId) switchToChat(chat.id) }}
             >
-              {chat.title}
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {chat.title}
+              </span>
+              <button
+                style={{ background: "none", border: "none", color: "#444", cursor: "pointer", fontSize: 11, padding: "2px 4px", flexShrink: 0, lineHeight: 1, borderRadius: 3 }}
+                title="Delete chat"
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  const res = await fetch(`${API}/chats/${chat.id}`, { method: "DELETE" })
+                  const data = await res.json()
+                  setChats(prev => prev.filter(c => c.id !== chat.id))
+                  if (chat.id === activeChatId) {
+                    const remaining = chats.filter(c => c.id !== chat.id)
+                    if (remaining.length > 0) {
+                      await switchToChat(data.active_chat_id)
+                    } else {
+                      // Server auto-created a new chat
+                      setChats([{ id: data.active_chat_id, title: "New Chat" }])
+                      setActiveChatId(data.active_chat_id)
+                      setMessages([])
+                      setBlocks({})
+                      setPreviews({})
+                      setSelected([])
+                    }
+                  }
+                }}
+              >✕</button>
             </div>
           ))}
         </div>
@@ -676,7 +821,7 @@ export default function App() {
                   data-tooltip={blockTooltip(meta)}
                   style={{
                     ...styles.blockItem,
-                    border: selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
+                    border: flashingBlocks.includes(id) ? "1px solid #c8a020" : selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
                     opacity: meta.compressed ? 0.6 : 1
                   }}
                   onClick={() => !meta.compressed && toggleSelect(id)}
@@ -709,7 +854,16 @@ export default function App() {
                     <span style={styles.blockTokens}>{settings.showTokenCounts ? `${getBlockTokens(meta).toLocaleString()} tokens` : "—"}</span>
                   </div>
                   {meta.uploaded_at && <div style={styles.blockTimestamp}>{relativeTime(meta.uploaded_at)}</div>}
-                  {meta.compressed && <div style={styles.compressedBadge}>✓ compressed</div>}
+                  {meta.compressed && (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                      <span style={{ fontSize: 11, color: "#4ECDC4" }}>✓ compressed</span>
+                      {meta.summary_tokens != null && settings.showTokenCounts && (
+                        <span style={{ fontSize: 11, fontFamily: "'Courier New', monospace", color: "#4ECDC4" }}>
+                          {meta.summary_tokens.toLocaleString()} tokens
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
 
@@ -721,7 +875,7 @@ export default function App() {
                   data-tooltip={blockTooltip(meta)}
                   style={{
                     ...styles.listItem,
-                    border: selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
+                    border: flashingBlocks.includes(id) ? "1px solid #c8a020" : selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
                     opacity: meta.compressed ? 0.6 : 1
                   }}
                   onClick={() => !meta.compressed && toggleSelect(id)}
@@ -745,6 +899,11 @@ export default function App() {
                     {settings.showTokenCounts && (
                       <span style={styles.blockTokens}>{getBlockTokens(meta).toLocaleString()}</span>
                     )}
+                    {meta.compressed && meta.summary_tokens != null && settings.showTokenCounts && (
+                      <span style={{ fontSize: 10, fontFamily: "'Courier New', monospace", color: "#4ECDC4" }}>
+                        {meta.summary_tokens.toLocaleString()}
+                      </span>
+                    )}
                     {meta.compressed && <span style={{ fontSize: 10, color: "#4ECDC4" }}>✓</span>}
                   </div>
                 </div>
@@ -760,7 +919,7 @@ export default function App() {
                     borderRadius: 8,
                     overflow: "hidden",
                     cursor: "pointer",
-                    border: selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
+                    border: flashingBlocks.includes(id) ? "1px solid #c8a020" : selected.includes(id) ? "1px solid #4ECDC4" : "1px solid #2A2A2A",
                     opacity: meta.compressed ? 0.6 : 1
                   }}
                   onClick={() => !meta.compressed && toggleSelect(id)}
@@ -860,6 +1019,19 @@ export default function App() {
           onResetSession={handleResetSession}
         />
       )}
+
+      {/* TOAST CONTAINER */}
+      <div style={{
+        position: "fixed", bottom: 24, right: panelOpen ? 296 : 16,
+        zIndex: 300, display: "flex", flexDirection: "column-reverse", gap: 8,
+        alignItems: "flex-end", transition: "right 0.2s ease", pointerEvents: "none"
+      }}>
+        {toasts.map(t => (
+          <div key={t.id} style={{ pointerEvents: "auto" }}>
+            <Toast message={t.message} onDismiss={() => setToasts(prev => prev.filter(x => x.id !== t.id))} />
+          </div>
+        ))}
+      </div>
 
       {/* FULL SCREEN IMAGE OVERLAY */}
       {overlayImage && (

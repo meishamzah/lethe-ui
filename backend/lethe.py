@@ -202,22 +202,24 @@ class ContextSession:
     def compress(self, block_id):
         if block_id not in self.blocks:
             print(f"No block found with id: {block_id}")
-            return
-    
+            return {"compressed": False, "reason": "block_not_found", "original_tokens": 0, "summary_tokens": 0}
+
         if self.blocks[block_id]["compressed"]:
             print(f"{block_id} is already compressed")
-            return
-        
+            return {"compressed": True, "reason": "already_compressed", "original_tokens": 0, "summary_tokens": 0}
+
         block_type = self.blocks[block_id]["type"]
 
         if block_type == "image":
-            self.compress_image(block_id)
+            return self.compress_image(block_id)
         elif block_type == "code":
-            self._compress_code(block_id)
+            return self._compress_code(block_id)
         elif block_type == "text":
-            self._compress_text(block_id)
+            return self._compress_text(block_id)
         elif block_type == "pdf":
-            self._compress_pdf(block_id)
+            return self._compress_pdf(block_id)
+
+        return {"compressed": False, "reason": "unknown_type", "original_tokens": 0, "summary_tokens": 0}
 
     def compress_image(self, block_id):
         if block_id not in self.blocks:
@@ -308,11 +310,17 @@ class ContextSession:
         summary = summary_response.content[0].text
         summary_tokens = len(summary.split()) * 1.3  # rough token estimate for summary text
 
-        if summary_tokens >= self.blocks[block_id].get("image_tokens", 0):
-            print(f"⚠ Summary ({int(summary_tokens)} tokens) is larger than original image tokens")
+        image_tokens = self.blocks[block_id].get("image_tokens", 0)
+        if summary_tokens >= image_tokens:
+            print(f"⚠ Summary ({int(summary_tokens)} tokens) is larger than original image tokens ({image_tokens})")
             print(f"  Compression not applied.")
-            return
-        
+            return {
+                "compressed": False,
+                "reason": "summary_larger_than_original",
+                "original_tokens": image_tokens,
+                "summary_tokens": int(summary_tokens)
+            }
+
         # step 3 — replace image block with summary
         original_message = self.history[msg_index]
         new_content = []
@@ -324,14 +332,12 @@ class ContextSession:
                 })
             else:
                 new_content.append(part)
-    
+
         self.history[msg_index]["content"] = new_content
         self.blocks[block_id]["compressed"] = True
         self.blocks[block_id]["summary"] = summary
         self.blocks[block_id]["summary_tokens"] = int(summary_tokens)
-        
-        # token reporting
-        image_tokens = self.blocks[block_id].get("image_tokens", 0)
+
         if image_tokens:
             tokens_saved = image_tokens - summary_tokens
             pct = round((tokens_saved / image_tokens) * 100)
@@ -339,8 +345,13 @@ class ContextSession:
             print(f"Tokens: ~{image_tokens:,} → ~{int(summary_tokens):,} ({pct}% reduction)")
         else:
             print(f"\n✓ Compressed '{block_id}'")
-    
+
         print(f"\nSummary:\n{summary}")
+        return {
+            "compressed": True,
+            "original_tokens": image_tokens,
+            "summary_tokens": int(summary_tokens)
+        }
     
     def status(self):
         if not self.blocks:
@@ -449,27 +460,55 @@ Be concise. This summary replaces the raw code and all its versions in conversat
         summary = summary_response.content[0].text
         summary_tokens = int(len(summary) / 4)
 
-        # calculate original tokens — base code + all diffs
-        original_tokens = int(len(base_code) / 4) + sum(int(len(d) / 4) for d in diffs)
+        # Count actual tokens from ALL code block entries in history (accurate for multi-version)
+        original_tokens = 0
+        for msg in self.history:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if part.get("type") == "text" and f"[Code block '{block_id}'" in part.get("text", ""):
+                    original_tokens += len(part["text"]) // 4
+        if original_tokens == 0:
+            original_tokens = int(len(base_code) / 4) + sum(int(len(d) / 4) for d in diffs)
 
         if summary_tokens >= original_tokens:
             print(f"⚠ Summary ({summary_tokens} tokens) is larger than original ({original_tokens} tokens)")
             print(f"  Compression not applied. Block too small.")
-            return
-        
-        # replace all code-related content in history with summary
-        original_message = self.history[msg_index]
-        new_content = []
-        if isinstance(original_message["content"], list):
-            for part in original_message["content"]:
+            return {
+                "compressed": False,
+                "reason": "summary_larger_than_original",
+                "original_tokens": original_tokens,
+                "summary_tokens": summary_tokens
+            }
+
+        # Replace the first upload's code block with the full summary
+        if isinstance(self.history[msg_index]["content"], list):
+            new_content = []
+            for part in self.history[msg_index]["content"]:
                 if part.get("type") == "text" and f"[Code block '{block_id}'" in part.get("text", ""):
-                    new_content.append({
-                        "type": "text",
-                        "text": f"[Compressed code '{block_id}']:\n{summary}"
-                    })
+                    new_content.append({"type": "text", "text": f"[Compressed code '{block_id}']:\n{summary}"})
                 else:
                     new_content.append(part)
-        self.history[msg_index]["content"] = new_content
+            self.history[msg_index]["content"] = new_content
+
+        # Replace code blocks in ALL other messages with a short stub
+        for i, msg in enumerate(self.history):
+            if i == msg_index:
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            new_content = []
+            changed = False
+            for part in content:
+                if part.get("type") == "text" and f"[Code block '{block_id}'" in part.get("text", ""):
+                    new_content.append({"type": "text", "text": f"[{block_id} — additional version (included in compression summary)]"})
+                    changed = True
+                else:
+                    new_content.append(part)
+            if changed:
+                self.history[i]["content"] = new_content
 
         self.blocks[block_id]["compressed"] = True
         self.blocks[block_id]["summary"] = summary
@@ -480,6 +519,11 @@ Be concise. This summary replaces the raw code and all its versions in conversat
         print(f"\n✓ Compressed '{block_id}'")
         print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")
         print(f"\nSummary:\n{summary}")
+        return {
+            "compressed": True,
+            "original_tokens": original_tokens,
+            "summary_tokens": summary_tokens
+        }
 
     def _compress_text(self, block_id):
         msg_index = self.blocks[block_id]["message_index"]
@@ -528,7 +572,12 @@ Be concise. This summary replaces the raw file content in conversation history."
 
         if summary_tokens >= original_tokens:
             print(f"⚠ Summary ({summary_tokens} tokens) is larger than original ({original_tokens} tokens). Compression not applied.")
-            return
+            return {
+                "compressed": False,
+                "reason": "summary_larger_than_original",
+                "original_tokens": original_tokens,
+                "summary_tokens": summary_tokens
+            }
 
         original_message = self.history[msg_index]
         new_content = []
@@ -551,6 +600,11 @@ Be concise. This summary replaces the raw file content in conversation history."
         pct = round((tokens_saved / original_tokens) * 100) if original_tokens else 0
         print(f"\n✓ Compressed '{block_id}'")
         print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")
+        return {
+            "compressed": True,
+            "original_tokens": original_tokens,
+            "summary_tokens": summary_tokens
+        }
 
     def _compress_pdf(self, block_id):
         msg_index = self.blocks[block_id]["message_index"]
@@ -597,7 +651,12 @@ Be concise. This summary replaces the PDF in conversation history."""
 
         if original_tokens > 0 and summary_tokens >= original_tokens:
             print(f"⚠ Summary ({summary_tokens} tokens) is larger than original ({original_tokens} tokens). Compression not applied.")
-            return
+            return {
+                "compressed": False,
+                "reason": "summary_larger_than_original",
+                "original_tokens": original_tokens,
+                "summary_tokens": summary_tokens
+            }
 
         original_message = self.history[msg_index]
         new_content = []
@@ -623,3 +682,8 @@ Be concise. This summary replaces the PDF in conversation history."""
         print(f"\n✓ Compressed '{block_id}'")
         if original_tokens:
             print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")
+        return {
+            "compressed": True,
+            "original_tokens": original_tokens,
+            "summary_tokens": summary_tokens
+        }

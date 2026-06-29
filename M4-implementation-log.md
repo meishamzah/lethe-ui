@@ -133,6 +133,208 @@ Added `.upload-menu-item:hover` rule:
 
 ---
 
+---
+
+## Compression Guard — User Notification
+
+**Date implemented:** 2026-06-28 (added after initial M4 commit)
+
+### Overview
+Previously, all compress methods returned `None` silently when the guard triggered (summary >= original tokens). No feedback was given to the user — the block appeared unchanged with no explanation.
+
+### Changes
+
+#### `backend/lethe.py`
+
+**`compress()` dispatcher:**
+- Now returns the result dict from the type-specific method
+- Returns `{"compressed": False, "reason": "block_not_found", ...}` for missing blocks
+- Returns `{"compressed": True, "reason": "already_compressed", ...}` for already-compressed blocks
+
+**All 4 compress methods** (`compress_image`, `_compress_code`, `_compress_text`, `_compress_pdf`) now return a result dict:
+
+Guard path (summary too large):
+```python
+return {
+    "compressed": False,
+    "reason": "summary_larger_than_original",
+    "original_tokens": <int>,
+    "summary_tokens": <int>
+}
+```
+
+Success path:
+```python
+return {
+    "compressed": True,
+    "original_tokens": <int>,
+    "summary_tokens": <int>
+}
+```
+
+#### `backend/app.py`
+
+**`/compress` route:**
+- Captures return value from `session.compress(block_id)` instead of discarding it
+- Merges `block_id` into each result dict
+- Falls back to `{"compressed": False, "reason": "unknown", ...}` if result is `None`
+- Returns `{"results": [...]}` array — one entry per requested block
+
+**Response format:**
+```json
+{
+  "results": [
+    {"block_id": "big.txt", "compressed": true, "original_tokens": 444, "summary_tokens": 223},
+    {"block_id": "tiny.txt", "compressed": false, "reason": "summary_larger_than_original", "original_tokens": 0, "summary_tokens": 77}
+  ]
+}
+```
+
+#### `frontend/src/App.jsx`
+
+**`Toast` component** (new, module-level):
+- Dark background, amber `⚠` icon, message text, ✕ dismiss button
+- `fadeIn 0.2s` animation on mount
+- Max width 340px, stacks vertically
+
+**`toasts` state:** `useState([])` — array of `{id, message}` objects
+
+**`flashingBlocks` state:** `useState([])` — array of block IDs with active amber border
+
+**`addToast(message)` helper:**
+- Generates unique ID via `Date.now() + Math.random()`
+- Appends toast, auto-removes after 5000ms
+
+**`confirmCompress()` updated:**
+- Reads compress response JSON (was previously discarded)
+- For each failed block with `reason === "summary_larger_than_original"`:
+  - Calls `addToast()` with the architecture-specified message format
+  - Sets `flashingBlocks` to include that block_id, removes after 1500ms
+- Success banner (compressionMsg) only shown when at least one block succeeded
+
+**Block border logic (all 3 views — detailed, list, tile):**
+```js
+border: flashingBlocks.includes(id) ? "1px solid #c8a020"
+      : selected.includes(id)        ? "1px solid #4ECDC4"
+      :                                "1px solid #2A2A2A"
+```
+Combined with existing `transition: "border 0.15s"` on `blockItem`/`listItem`, this produces a smooth amber flash.
+
+**Toast container (fixed position, bottom-right):**
+- `position: fixed`, `bottom: 24`, `right: panelOpen ? 296 : 16`
+- Shifts with panel open/closed state (0.2s transition)
+- `pointerEvents: none` on wrapper so toasts don't block panel interaction
+- Individual toasts have `pointerEvents: auto` for dismiss button
+
+### Test Results
+
+| Test | Result |
+|------|--------|
+| Tiny file (3 chars) → guard fires | ✓ `compressed: false`, `reason: "summary_larger_than_original"`, `original_tokens: 0`, `summary_tokens: 77` |
+| Block unchanged after guard | ✓ `compressed: false` confirmed on `/status` after compress attempt |
+| Large file (444 tokens) → compression succeeds | ✓ `compressed: true`, `original_tokens: 444`, `summary_tokens: 223` |
+| Frontend build | ✓ clean build, no errors |
+
+---
+
+---
+
+## Code File Compression — Bug Fix (multi-version)
+
+**Date:** 2026-06-28
+
+### Bug Found
+`_compress_code()` in `lethe.py` only replaced the code block in the FIRST upload message (at `message_index`). When a file was re-uploaded (creating a new message with `[Code block 'name' - updated version]`), those later messages were left untouched after compression. The full raw code remained in conversation history, so no actual token reduction occurred for re-uploaded files.
+
+Additionally, `original_tokens` was estimated as `len(base_code)//4 + sum(len(d)//4 for d in diffs)` — this used the latest code + diffs rather than the actual text in history, making it an inaccurate measure of what compression would actually save.
+
+### Fix (`backend/lethe.py` — `_compress_code()`)
+
+**`original_tokens` now counts actual history text:**
+```python
+original_tokens = 0
+for msg in self.history:
+    content = msg.get("content")
+    if not isinstance(content, list):
+        continue
+    for part in content:
+        if part.get("type") == "text" and f"[Code block '{block_id}'" in part.get("text", ""):
+            original_tokens += len(part["text"]) // 4
+if original_tokens == 0:
+    original_tokens = int(len(base_code) / 4) + sum(int(len(d) / 4) for d in diffs)
+```
+
+**All code block entries in history now replaced:**
+- First message (`msg_index`): replaced with full summary as before
+- All subsequent messages: replaced with a short stub `[{block_id} — additional version (included in compression summary)]`
+- Net effect: ALL raw code is removed from conversation history after compression
+
+### Test Results
+
+| Test | Before Fix | After Fix |
+|------|-----------|-----------|
+| Single-version compress | ✓ worked | ✓ works |
+| Multi-version: raw code in later messages | ✗ `[Code block...]` remained in history | ✓ replaced with stub |
+| `original_tokens` accuracy | undercount (missed v1 text in history) | ✓ scans actual history text (1517 vs 976 for 2-version file) |
+
+---
+
+---
+
+## Compressed Block Token Display + Compression Banner Fix
+
+**Date:** 2026-06-28
+
+### Changes
+
+#### `frontend/src/App.jsx`
+
+**Detailed view — teal summary token count on compressed blocks:**
+
+Replaced the standalone `✓ compressed` badge with a flex row that puts the badge on the left and the new token count in teal on the right — directly below the original greyed token count, right-aligned to match:
+
+```
+image       1,234 tokens   ← original (grey, unchanged)
+✓ compressed    146 tokens ← new (teal, on same row as badge)
+```
+
+Only rendered when `meta.summary_tokens != null && settings.showTokenCounts`.
+
+**List view — teal summary token count on compressed blocks:**
+
+Added a teal token count above the `✓` tick in the right-side column:
+
+```
+1,234   ← original (grey)
+  146   ← summary (teal)
+    ✓
+```
+
+**Compression success banner — batch-accurate token math:**
+
+Previous: `from = sum of ALL block tokens before`, `to = sum of ALL active block tokens after` — included blocks from previous sessions, making the numbers confusing and misleading.
+
+Fixed: `from` and `to` now come directly from the `/compress` response's per-block `original_tokens` / `summary_tokens`, summed only over the blocks that successfully compressed in this batch.
+
+```js
+const succeeded = results.filter(r => r.compressed)
+const batchOriginal = succeeded.reduce((sum, r) => sum + (r.original_tokens || 0), 0)
+const batchSummary  = succeeded.reduce((sum, r) => sum + (r.summary_tokens  || 0), 0)
+setCompressionMsg({ from: batchOriginal, to: batchSummary, saved: batchOriginal - batchSummary })
+```
+
+Banner now shows e.g. `454 → 421 tokens` for the compressed files, not total context.
+
+### Test Results
+
+| Test | Result |
+|------|--------|
+| `/status` has `summary_tokens` after compression | ✓ confirmed (e.g. `code_tokens: 441`, `summary_tokens: 421`) |
+| Banner shows batch-only token math | ✓ `454 -> 421` (not total-context numbers) |
+| Frontend build | ✓ clean |
+
+---
+
 ## What was NOT implemented (per spec)
 
 - **PDF Phase 2** (full multimodal compression): deferred to its own milestone after M5

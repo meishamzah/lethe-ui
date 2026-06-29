@@ -231,29 +231,610 @@ Settings modal
 - Layout: [avatar] [name · plan] [settings icon]
 - Settings icon replaces the download icon shown in Claude's UI
 
-## Persistence Layer (Milestone 4)
 
-### Database: SQLite
 
-Tables:
-- `chats` — id, title, created_at
-- `messages` — id, chat_id, role, content, created_at  
-- `blocks` — id, chat_id, block_id, type, image_tokens, summary_tokens, compressed, summary, path
 
-### Flask Endpoints needed:
-- `POST /new_chat` — creates fresh ContextSession, new chat row in DB, returns chat_id
-- `POST /switch_chat/<chat_id>` — loads chat's messages from DB, reconstructs ContextSession history and blocks, returns messages + blocks
-- `GET /chats` — returns list of all chats for sidebar
-- Every `/send` and `/compress` call must write to DB immediately
+## Milestone 4 — Content Types
 
-### On page refresh:
-- Frontend calls `/chats` to get list
-- Auto-loads most recent chat
-- Everything restores from DB
+### Code file upload
 
-### Session design:
-- Each chat has its own ContextSession instance
-- Switching chats swaps the active session on the backend
-- New chat = new ContextSession()
-- Images/blocks are per-chat, not global
+#### UI changes
+- `+` button expands into a small menu with two options:
+  - 📷 Image
+  - 📄 Code file
+- Code file picker filters to common extensions:
+  .py .js .jsx .ts .tsx .cpp .c .java .go .rs .rb .swift .kt .cs .html .css
+- Uploaded code file appears in right panel under type filter "Code"
+- No thumbnail — shows file icon + filename + token count instead
+- Same select-to-compress flow as images
 
+#### Backend changes (app.py)
+- Update POST /send to handle code file uploads via FormData
+- Save uploaded code file to backend/uploads/code/ subfolder
+- Call session.send() with code_path and code_id parameters
+- code_id = filename (same as image block_id pattern)
+- Return reply + updated blocks as usual
+
+#### Delta compression flow
+- First upload of a file → stored as base version in session.blocks
+- Re-upload of same filename → Lethe detects existing code_id, 
+  computes diff, stores delta only
+- Model always sees latest complete version + change history
+- User never needs to do anything special — just re-upload the edited file
+
+#### Right panel behavior
+- Code blocks show:
+  - File icon (no thumbnail)
+  - Filename as block ID
+  - Token count (estimated from character count / 4)
+  - Number of versions tracked e.g. "3 versions"
+  - ✓ compressed badge when compressed
+- Compression sweep animation: teal highlight on the row 
+  instead of thumbnail sweep (same as list view animation)
+
+#### compress() behavior for code
+- Already implemented in lethe.py via _compress_code()
+- Summarizes: what the code does, problems found, fixes applied, final version
+- Guard: won't compress if summary tokens > original tokens
+- No changes needed to lethe.py
+
+#### Token estimation for code blocks
+- Use character count / 4 as rough estimate
+- Show in right panel same as image tokens
+- Update Active and Saved totals in token summary accordingly
+
+#### Status endpoint update
+- session.blocks already returns code block metadata
+- Ensure summary_tokens stored correctly after compression
+- Frontend reads meta.type === "code" to render correctly
+
+### Text file upload
+
+#### UI changes
+- Add third option to `+` button menu:
+  - 📷 Image
+  - 📄 Code file
+  - 📝 Text file
+- Text file picker filters to: .txt .md .csv .json .xml .yaml .yml .log
+- Uploaded text file appears in right panel under type filter "Text"
+- Shows file icon + filename + token count, no thumbnail
+- Same select-to-compress flow as images and code
+
+#### Backend changes (app.py)
+- Update POST /send to handle text file uploads via FormData
+- Save uploaded text file to backend/uploads/text/ subfolder
+- Read file content as plain string
+- Send to Claude as a text block in the message content:
+```python
+  {
+    "type": "text",
+    "text": f"[Text file '{filename}']:\n{file_content}"
+  }
+```
+- Track in session.blocks with type: "text"
+
+#### session.blocks metadata for text
+```python
+{
+  "id": filename,
+  "type": "text",
+  "path": file_path,
+  "content": file_content,  # store raw content for compression
+  "message_index": len(self.history),
+  "compressed": False,
+  "text_tokens": len(file_content) // 4  # rough estimate
+}
+```
+
+#### compress() behavior for text
+- Same pattern as code compression but simpler — no delta tracking
+- Scan conversation for references to the file
+- Tiered compression based on engagement:
+  - Heavily discussed sections — detailed summary with query highlights
+  - Lightly mentioned sections — 2-3 sentence summary
+  - Never mentioned sections — 1 sentence label
+- Replace raw file content in history with compressed summary
+- Add _compress_text() method to lethe.py following same pattern 
+  as _compress_image() and _compress_code()
+
+#### Token estimation
+- len(file_content) // 4 as rough estimate
+- Show in right panel same as other block types
+- Update Active and Saved totals accordingly
+
+#### Right panel behavior
+- Text blocks show:
+  - Text file icon
+  - Filename as block ID
+  - Token count
+  - ✓ compressed badge when compressed
+- No version tracking — text files are not delta compressed
+- If user re-uploads same filename, treat as a new block 
+  (unlike code which diffs)
+
+### PDF upload
+
+#### Phase 1 (ships with M4)
+- Add fourth option to `+` button menu:
+  - 📷 Image
+  - 📄 Code file
+  - 📝 Text file
+  - 📑 PDF
+- PDF picker filters to: .pdf
+- Send to Claude as native document block (base64 encoded):
+```python
+  {
+    "type": "document",
+    "source": {
+      "type": "base64",
+      "media_type": "application/pdf",
+      "data": base64_encoded_pdf
+    }
+  }
+```
+- Claude reads text and images natively — no parsing needed for Phase 1
+- Track in session.blocks with type: "pdf"
+- Compression falls back to standard conversational summarization —
+  scan references, summarize what was discussed, replace raw PDF
+- Save to backend/uploads/pdf/ subfolder
+- Validation before upload:
+  - File size must be under 32MB
+  - Page count must be under 100 pages
+  - Text-based PDFs only — surface warning for scanned PDFs
+- Right panel: PDF icon + filename + token count + compressed badge
+- Token estimation: file size in bytes / 6 as rough estimate for Phase 1
+
+### Right panel filter pills update (M4)
+
+#### Type filter row update
+- Expand type filter row to include all new content types:
+  All types · Images · Code · PDFs · Text
+- Pills added as new content types are implemented
+- Counts next to each pill update reactively as blocks are added
+  e.g. "Images 3 · Code 2 · PDFs 1 · Text 1"
+- No category sections or dropdowns in the right panel —
+  filter pills are the only navigation between content types
+- All existing filter behavior unchanged — status and type 
+  filters work independently as designed in M2
+
+### Compression guard — user notification
+
+#### Current behavior (silent)
+- _compress_image() and _compress_code() both have a guard that 
+  returns early if summary tokens >= original tokens
+- No feedback is given to the user when this happens
+- User clicks compress, nothing visible changes, no explanation
+
+#### Required behavior
+- When compression guard triggers, notify the user clearly
+- Do not silently fail
+
+#### UI notification
+- Toast notification appears in bottom right corner of screen
+- Style: dark background, amber/warning tone, auto-dismisses after 5 seconds
+- Message format:
+  "'{block_id}' wasn't compressed — the summary ({X} tokens) was 
+  larger than the original ({Y} tokens). This usually happens with 
+  small files. No changes were made."
+- Block remains in right panel in its original uncompressed state
+- Block border briefly flashes amber to draw attention to it
+- If multiple blocks were selected and only some failed, 
+  show one toast per failed block
+
+#### Backend changes
+- Update /compress endpoint to return compression result per block:
+```python
+  {
+    "results": [
+      {
+        "block_id": "image.png",
+        "compressed": True,
+        "original_tokens": 13685,
+        "summary_tokens": 146
+      },
+      {
+        "block_id": "small.png", 
+        "compressed": False,
+        "reason": "summary_larger_than_original",
+        "original_tokens": 420,
+        "summary_tokens": 510
+      }
+    ]
+  }
+```
+- lethe.py _compress_image() and _compress_code() should return 
+  a result dict instead of just printing — so app.py can relay 
+  the outcome to the frontend
+
+#### Frontend changes
+- Read results array from /compress response
+- For each failed block, show a toast notification
+- For each successful block, update panel as normal
+- Add toast component to App.jsx — 
+  stack multiple toasts if needed, each auto-dismisses after 5s
+
+## Milestone 5 — Persistence + Auth
+
+### Phase 1 — Persistence (ships first)
+
+#### Database: SQLite
+- Single file database: backend/lethe.db
+- Library: sqlite3 (built into Python, no install needed)
+- Initialize on app startup if db doesn't exist
+
+#### Schema
+```sql
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  google_id TEXT UNIQUE NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  display_name TEXT,
+  avatar_url TEXT,
+  plan TEXT DEFAULT 'free',
+  api_key_encrypted TEXT,
+  api_provider TEXT DEFAULT 'gemini',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE chats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT DEFAULT 'New chat',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  image_url TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+  block_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  path TEXT,
+  image_tokens INTEGER DEFAULT 0,
+  summary_tokens INTEGER DEFAULT 0,
+  compressed BOOLEAN DEFAULT FALSE,
+  summary TEXT,
+  message_index INTEGER,
+  uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  base_code TEXT,
+  diffs TEXT
+);
+```
+
+#### Flask endpoints
+
+```python
+GET    /chats              # returns list of all chats for current user
+POST   /new_chat           # creates new chat, returns chat_id
+POST   /switch_chat/<id>   # loads chat history and blocks, returns both
+PUT    /chats/<id>/title   # update chat title
+DELETE /chats/<id>         # delete chat and all its messages and blocks
+```
+
+#### Session management
+- Flask keeps a dict of active ContextSession objects keyed by chat_id:
+```python
+  sessions = {}
+  active_chat_id = None
+```
+- POST /new_chat → creates new ContextSession, stores in sessions dict,
+  inserts row in chats table, sets active_chat_id
+- POST /switch_chat/<id> → checks if session exists in dict,
+  if not: reconstructs from DB, sets active_chat_id
+- All /send, /compress, /status calls operate on sessions[active_chat_id]
+
+#### Writing to DB
+Every operation writes to DB immediately:
+- POST /send → insert user message + assistant reply into messages,
+  update blocks if file uploaded, update chats.updated_at
+- POST /compress → update blocks row: compressed, summary, summary_tokens
+- POST /new_chat → insert row into chats
+- Ephemeral prompt injection results → update chats.title and 
+  blocks.block_id in DB when extracted
+
+#### Reconstructing a session from DB
+```python
+def reconstruct_session(chat_id):
+    session = ContextSession(client=client)
+    
+    messages = db.execute(
+        "SELECT role, content FROM messages 
+         WHERE chat_id = ? ORDER BY created_at",
+        [chat_id]
+    )
+    for msg in messages:
+        session.history.append({
+            "role": msg["role"],
+            "content": msg["content"]
+        })
+    
+    blocks = db.execute(
+        "SELECT * FROM blocks WHERE chat_id = ?",
+        [chat_id]
+    )
+    for block in blocks:
+        session.blocks[block["block_id"]] = {
+            "id": block["block_id"],
+            "type": block["type"],
+            "path": block["path"],
+            "image_tokens": block["image_tokens"],
+            "summary_tokens": block["summary_tokens"],
+            "compressed": block["compressed"],
+            "summary": block["summary"],
+            "message_index": block["message_index"],
+            "base_code": block["base_code"],
+            "diffs": json.loads(block["diffs"]) if block["diffs"] else []
+        }
+    
+    sessions[chat_id] = session
+    return session
+```
+
+#### On page refresh
+- Frontend calls GET /chats on mount
+- Gets list of chats sorted by updated_at descending
+- Auto-loads most recent chat via POST /switch_chat/<id>
+- Sidebar populates with all chat titles
+- Right panel restores that chat's blocks
+- Chat area restores that chat's messages
+
+#### Serving uploaded files
+```python
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    return send_from_directory('uploads', filename)
+```
+Frontend reconstructs previews from block paths:
+```javascript
+previews[block.block_id] = `http://127.0.0.1:5000/uploads/${block.path}`
+```
+
+#### Frontend changes
+- On mount: fetch /chats, load most recent, populate sidebar
+- "+ New" button: calls POST /new_chat, clears state
+- Clicking chat in sidebar: calls POST /switch_chat/<id>,
+  restores messages and blocks
+- previews reconstructed from served file paths
+
+---
+
+### Phase 2 — Auth
+
+#### Approach
+- Google OAuth only — no email/password
+- authlib for OAuth flow
+- Flask-Login for session management
+- Multi-device by design — chats tied to user_id, accessible from any device
+
+#### What Google gives us (no forms needed)
+- google_id — unique, permanent identifier
+- email
+- display_name
+- avatar_url — Google profile picture
+
+#### Auth endpoints
+```python
+GET  /auth/google           # redirects to Google OAuth consent screen
+GET  /auth/google/callback  # handles callback, creates or logs in user
+POST /auth/logout           # clears session
+GET  /auth/me               # returns current user info for sidebar
+```
+#### Guest sessions
+- Users who haven't logged in get a guest session
+- Guest ID generated as `guest_<uuid>` and stored in localStorage on first visit
+- Bottom left sidebar shows: `[?] Guest · Free ∨` in guest state
+- Clicking opens popover with:
+  - "Log in with Google" as primary option (teal accent)
+  - Settings
+  - Log out hidden/greyed out in guest state
+- Guest chats are saved in DB tagged with guest_id instead of user_id
+- Schema: chats.guest_id TEXT column added alongside chats.user_id
+  (one or the other is set, never both)
+
+#### Guest to user migration on login
+- When a guest logs in with Google, all chats tagged with their guest_id
+  are migrated to their new user_id
+- Migration happens in /auth/google/callback after user row is created/found:
+```python
+  db.execute(
+      "UPDATE chats SET user_id = ?, guest_id = NULL 
+       WHERE guest_id = ?",
+      [user_id, guest_id_from_cookie]
+  )
+```
+- guest_id cookie/localStorage cleared after migration
+- User sees all their previous guest chats immediately after login
+- Nothing is lost on login
+
+#### Guest API key pool
+- Lethe maintains two separate Gemini Flash key pools:
+  - **Chat key pool** — for user-facing chat messages (session.send())
+  - **Backend key pool** — for Lethe operations (compress(), ephemeral 
+    prompt injection, image renaming, chat titling)
+- Keeping pools separate prevents compression calls from eating into 
+  the user's chat rate limits
+- One key per pool per 5 users:
+  - Users 1-5 → Chat Key A + Backend Key A
+  - Users 6-10 → Chat Key B + Backend Key B
+  - And so on
+- Key assignment is deterministic by guest_id:
+```python
+  def get_chat_key(guest_id):
+      index = hash(guest_id) % len(CHAT_KEY_POOL)
+      return CHAT_KEY_POOL[index]
+
+  def get_backend_key(guest_id):
+      index = hash(guest_id) % len(BACKEND_KEY_POOL)
+      return BACKEND_KEY_POOL[index]
+```
+- Keys stored as environment variables, never in DB
+- New keys added to pool manually as guest count grows
+
+#### Guest message limit
+- No hard stop for now — revisit when traffic data is available
+- Soft nudge shown at message 4-5:
+  "You're chatting on Gemini Flash. Log in with Google to save 
+  your chats and unlock better limits — it's free."
+- Two CTAs: Log in with Google (primary) · Bring your own key (secondary)
+- Nudge shown once per session, dismissible
+- Hard stop threshold to be decided based on real usage patterns
+
+#### Analytics
+- Log every guest_id creation with timestamp
+- Events table for funnel tracking:
+```sql
+  CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT,  -- page_visit, message_sent, login, key_added, compressed
+    guest_id TEXT,
+    user_id INTEGER,
+    metadata TEXT,    -- JSON for extra context
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+```
+- Visitors = guest rows created
+- Active users = guests who sent at least one message
+- Use TablePlus or DB viewer for now — no admin dashboard until M6
+
+#### Auth flow
+1. User hits /auth/google → redirected to Google
+2. User approves → Google redirects to /auth/google/callback
+3. Backend checks if google_id exists in users table
+   - If yes: log them in
+   - If no: create new user row, log them in
+4. Flask-Login sets session cookie
+5. Frontend redirects to main app
+
+#### Multi-device
+- Works automatically once auth is in place
+- Chats are server-side, tied to user_id
+- Any device that logs in with the same Google account sees the same chats
+- Requires app to be deployed to a real server (not localhost)
+
+#### API key storage
+- API keys stored encrypted in users table (api_key_encrypted column)
+- Encryption: Python cryptography library, Fernet symmetric encryption
+- Encryption key stored as environment variable on server, never in DB
+- Flow:
+  - User pastes key in settings → POST /settings/api_key → 
+    backend encrypts, stores in DB
+  - API call needed → backend decrypts key server-side, uses it,
+    never sends raw key to frontend
+  - Frontend only knows which provider is active, never sees raw key
+- Even if DB is compromised, keys are unreadable without server encryption key
+
+#### API key endpoints
+```python
+POST /settings/api_key  # receives raw key, encrypts, stores
+GET  /settings/api_key  # returns provider name only, never raw key
+```
+
+#### Settings migration
+- All settings move from localStorage to a settings table keyed by user_id
+- On login, settings loaded from DB
+- localStorage cleared after migration
+
+#### Settings table
+```sql
+CREATE TABLE settings (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id),
+  auto_rename_images BOOLEAN DEFAULT TRUE,
+  auto_compress_without_asking BOOLEAN DEFAULT FALSE,
+  auto_compress_threshold INTEGER DEFAULT 80,
+  compression_min_tokens INTEGER DEFAULT 500,
+  show_token_counts BOOLEAN DEFAULT TRUE,
+  auto_title_chats BOOLEAN DEFAULT TRUE,
+  show_typing_animation BOOLEAN DEFAULT TRUE,
+  send_on_enter BOOLEAN DEFAULT TRUE,
+  default_view_mode TEXT DEFAULT 'detailed',
+  default_status_filter TEXT DEFAULT 'all',
+  panel_open_by_default BOOLEAN DEFAULT TRUE,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### Frontend changes for auth
+- Login page: single "Continue with Google" button
+- If not authenticated: redirect to login page
+- If authenticated: load main app
+- User profile in sidebar bottom:
+  - Avatar: Google profile picture or initials fallback
+  - Display name from Google
+  - Plan tier from users.plan
+  - Reads from GET /auth/me on mount
+
+## Milestone 6 - Polishing
+
+
+### Context health bar
+- Thin bar above the input box, full width of chat area
+- Fills left to right based on estimated tokens used vs provider limit
+- Label and percentage right-aligned, bar stops just before label
+- Provider context limits:
+```javascript
+  const contextLimits = {
+    gemini: 1000000,
+    anthropic: 200000,
+    openai: 128000,
+    deepseek: 128000
+  }
+```
+- Color stages:
+  - 0-50% — teal (healthy)
+  - 50-70% — amber (consider compressing soon)
+  - 70-85% — orange (compress now)
+  - 85-100% — red (urgent)
+- Nudge messages above input box:
+  - 50-70%: "Your context is getting full. Consider compressing some blocks."
+  - 70-85%: "Compress now for the best experience." + "Compress now" button
+  - 85%+: "Context almost full — compress to continue chatting effectively."
+- After compression: bar animates down to new value
+- Token estimate: sum of all message text tokens + active block tokens
+- Two separate pools means compression calls never spike user chat rate limits
+
+### Message action bar
+
+#### Trigger
+- Appears below each message on hover
+- Fades in smoothly — opacity 0 to 1 over 0.15s
+- Disappears when mouse leaves the message area
+
+#### Actions — assistant messages
+- **Copy** — copies the raw markdown text of the message to clipboard
+- **Retry** — resends the last user message to get a different response,
+  replaces the current assistant message in the chat
+- **Thumbs up / Thumbs down** — feedback buttons, 
+  for now just UI (store locally or no-op until analytics is built)
+
+#### Actions — user messages
+- **Copy** — copies the user's message text to clipboard
+- **Edit** — future milestone, not in current scope
+
+#### UI
+- Small icon buttons, same style as Claude's action bar
+- Icons: copy (ti-copy), play/retry (ti-refresh), thumbs up (ti-thumb-up), 
+  thumbs down (ti-thumb-down)
+- Icon size: 16px, color: #888, hover: #E8E8E8
+- No labels — icons only, tooltips on hover
+- Action bar sits 8px below the message bubble
+- Left-aligned for assistant messages, right-aligned for user messages
+
+#### Copy behavior
+- Copies raw text (not rendered HTML)
+- Brief visual confirmation — icon flips to a checkmark (ti-check) 
+  for 1.5 seconds then reverts
+
+#### Retry behavior
+- Removes the last assistant message from messages state
+- Re-sends the last user message to /send
+- Shows typing animation while waiting
+- Replaces with new response when it arrives
