@@ -1,16 +1,5 @@
 import { useState, useEffect } from "react"
 
-const PROVIDERS = [
-  { id: "gemini",    name: "Gemini Flash",  sub: "Free · No card required" },
-  { id: "anthropic", name: "Claude",         sub: "Paid · Best compression quality" },
-  { id: "openai",    name: "GPT (OpenAI)",   sub: "Paid" },
-]
-
-const PROVIDER_LINKS = {
-  gemini:    "https://aistudio.google.com/app/apikey",
-  anthropic: "https://console.anthropic.com",
-  openai:    "https://platform.openai.com/api-keys",
-}
 
 function Toggle({ value, onChange }) {
   return (
@@ -51,8 +40,6 @@ const CONFIRM_MAP = {
 export default function SettingsModal({ settings, onChange, onClose, onClearHistory, onClearFiles, onResetSession }) {
   const [section, setSection] = useState("context")
   const [confirmAction, setConfirmAction] = useState(null)
-  const [apiKeyDraft, setApiKeyDraft] = useState(settings.apiKey || "")
-
   useEffect(() => {
     const handler = e => { if (e.key === "Escape" && !confirmAction) onClose() }
     window.addEventListener("keydown", handler)
@@ -137,42 +124,10 @@ export default function SettingsModal({ settings, onChange, onClose, onClearHist
                 <Toggle value={settings.sendOnEnter} onChange={v => set("sendOnEnter", v)} />
               </SettingRow>
 
-              <SectionTitle>API connection</SectionTitle>
-              <div style={{ display: "flex", gap: 8, paddingTop: 12, paddingBottom: 8 }}>
-                {PROVIDERS.map(p => (
-                  <button key={p.id} type="button"
-                    style={{ ...S.providerCard, ...(settings.provider === p.id ? S.providerCardActive : {}) }}
-                    onClick={() => set("provider", p.id)}
-                  >
-                    <div style={{ fontWeight: 600, fontSize: 12, color: settings.provider === p.id ? "#4ECDC4" : "#D0D0D0" }}>{p.name}</div>
-                    <div style={{ fontSize: 10, color: "#555", marginTop: 4 }}>{p.sub}</div>
-                  </button>
-                ))}
+              <SectionTitle>API</SectionTitle>
+              <div style={{ fontSize: 12, color: "#666", paddingTop: 12, lineHeight: 1.6 }}>
+                This app uses Claude (Anthropic) as its backend. The API key is configured on the server — no key entry needed here.
               </div>
-
-              {settings.provider === "gemini" && (
-                <div style={S.disclaimer}>
-                  <span style={{ fontSize: 15, marginRight: 10, flexShrink: 0 }}>⚠</span>
-                  <span style={{ fontSize: 12, lineHeight: 1.5 }}>Google may use your conversations to train their models on the free tier. Switch to a paid provider to opt out.</span>
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: 8, paddingTop: 10, alignItems: "center" }}>
-                <input
-                  type="password"
-                  placeholder={`${settings.provider === "gemini" ? "Gemini" : settings.provider === "anthropic" ? "Anthropic" : "OpenAI"} API key`}
-                  value={apiKeyDraft}
-                  onChange={e => setApiKeyDraft(e.target.value)}
-                  style={S.apiInput}
-                />
-                <button type="button" style={S.saveKeyBtn} onClick={() => set("apiKey", apiKeyDraft)}>
-                  Save key
-                </button>
-              </div>
-              <a href={PROVIDER_LINKS[settings.provider]} target="_blank" rel="noreferrer"
-                style={{ fontSize: 11, color: "#4ECDC4", display: "block", marginTop: 8 }}>
-                Get API key →
-              </a>
             </>}
 
             {/* ── Right panel ── */}
@@ -279,26 +234,6 @@ const S = {
   },
   navItemActive: { background: "#222", color: "#E8E8E8", borderLeftColor: "#4ECDC4" },
   content: { flex: 1, padding: "4px 20px 20px", overflowY: "auto" },
-  providerCard: {
-    flex: 1, background: "#141414", border: "1px solid #2A2A2A",
-    borderRadius: 8, padding: "10px 12px", cursor: "pointer",
-    textAlign: "left", transition: "all 0.15s", fontFamily: "inherit"
-  },
-  providerCardActive: { borderColor: "#4ECDC4", background: "rgba(78,205,196,0.06)" },
-  disclaimer: {
-    background: "rgba(200,140,0,0.1)", border: "1px solid rgba(200,140,0,0.3)",
-    borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "flex-start",
-    color: "#c8a020", marginTop: 4
-  },
-  apiInput: {
-    flex: 1, background: "#141414", border: "1px solid #2A2A2A", borderRadius: 6,
-    color: "#E8E8E8", padding: "7px 12px", fontSize: 13, fontFamily: "inherit", outline: "none"
-  },
-  saveKeyBtn: {
-    background: "#4ECDC4", border: "none", borderRadius: 6, color: "#0F0F0F",
-    padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-    fontFamily: "inherit", flexShrink: 0
-  },
   radioBtn: {
     background: "none", border: "1px solid #2A2A2A", borderRadius: 5,
     color: "#555", padding: "5px 9px", fontSize: 11, cursor: "pointer",

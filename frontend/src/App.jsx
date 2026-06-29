@@ -17,8 +17,6 @@ const DEFAULT_SETTINGS = {
   autoTitleChats: true,
   showTypingAnimation: true,
   sendOnEnter: true,
-  apiKey: "",
-  provider: "gemini",
   defaultViewMode: "detailed",
   defaultStatusFilter: "all",
   panelOpenByDefault: true,
