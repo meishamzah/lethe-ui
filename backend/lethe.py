@@ -164,40 +164,12 @@ class ContextSession:
 
         raw_reply = response.content[0].text
 
-        # Extract injected tags
-        chat_title = None
-        image_title = None
-
-        if is_first and auto_title_chats:
-            m = re.search(r'\[CHAT_TITLE\](.*?)\[/CHAT_TITLE\]', raw_reply, re.DOTALL)
-            if m:
-                chat_title = m.group(1).strip()
-
-        if image_path and auto_rename_images:
-            m = re.search(r'\[IMAGE_TITLE\](.*?)\[/IMAGE_TITLE\]', raw_reply, re.DOTALL)
-            if m:
-                image_title = m.group(1).strip()
-
-        # Strip tags from reply before storing
-        clean_reply = raw_reply
-        clean_reply = re.sub(r'\[CHAT_TITLE\].*?\[/CHAT_TITLE\]', '', clean_reply, flags=re.DOTALL).strip()
-        clean_reply = re.sub(r'\[IMAGE_TITLE\].*?\[/IMAGE_TITLE\]', '', clean_reply, flags=re.DOTALL).strip()
-
-        self.history.append({"role": "assistant", "content": clean_reply})
+        self.history.append({"role": "assistant", "content": raw_reply})
 
         if image_path:
             self.blocks[block_id]["image_tokens"] = self._estimate_image_tokens(image_path)
 
-        # Rename block if image_title was extracted
-        if image_title and auto_rename_images and image_path and block_id in self.blocks:
-            self.blocks[image_title] = self.blocks.pop(block_id)
-            self.blocks[image_title]["id"] = image_title
-
-        return {
-            "reply": clean_reply,
-            "chat_title": chat_title,
-            "image_title": image_title
-        }
+        return {"reply": raw_reply}
     
     def compress(self, block_id):
         if block_id not in self.blocks:

@@ -1,6 +1,7 @@
 import os
 import sys
 import io
+import re
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -39,6 +40,46 @@ if not _startup_chats:
     sessions[active_chat_id] = ContextSession(client=client)
 else:
     active_chat_id = _startup_chats[0]["id"]
+
+# ── Reply cleaning ─────────────────────────────────────────────────────────────
+
+_HR = re.compile(r'^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$', re.MULTILINE)
+
+def _clean_injected_reply(raw, wants_title, wants_image_title):
+    """
+    Split on the lowest horizontal rule; extract metadata tags below it.
+    Falls back to inline stripping if no separator is present.
+    Returns (visible_reply, chat_title, image_title).
+    """
+    chat_title = image_title = None
+    matches = list(_HR.finditer(raw))
+
+    if matches:
+        last_hr = matches[-1]
+        visible = raw[:last_hr.start()].rstrip()
+        metadata = raw[last_hr.end():]
+    else:
+        visible = raw
+        metadata = raw
+
+    if wants_title:
+        m = re.search(r'\[CHAT_TITLE\](.*?)\[/CHAT_TITLE\]', metadata, re.DOTALL)
+        if m:
+            chat_title = m.group(1).strip()
+
+    if wants_image_title:
+        m = re.search(r'\[IMAGE_TITLE\](.*?)\[/IMAGE_TITLE\]', metadata, re.DOTALL)
+        if m:
+            image_title = m.group(1).strip()
+
+    if not matches:
+        if wants_title:
+            visible = re.sub(r'\[CHAT_TITLE\].*?\[/CHAT_TITLE\]', '', visible, flags=re.DOTALL)
+        if wants_image_title:
+            visible = re.sub(r'\[IMAGE_TITLE\].*?\[/IMAGE_TITLE\]', '', visible, flags=re.DOTALL)
+        visible = visible.strip()
+
+    return visible, chat_title, image_title
 
 # ── Chat management ────────────────────────────────────────────────────────────
 
@@ -167,6 +208,8 @@ def send():
         os.makedirs(os.path.join("uploads", "pdf"), exist_ok=True)
         pdf_file.save(pdf_path)
 
+    is_first_msg = len(session.history) == 0
+
     result = session.send(
         text,
         image_path=image_path,
@@ -177,6 +220,26 @@ def send():
         auto_rename_images=auto_rename_images,
         auto_title_chats=auto_title_chats
     )
+
+    # ── Clean reply ────────────────────────────────────────────────────────────
+    wants_title = is_first_msg and auto_title_chats
+    wants_image_title = bool(image) and auto_rename_images
+
+    if wants_title or wants_image_title:
+        clean_reply, chat_title, image_title = _clean_injected_reply(
+            result["reply"], wants_title, wants_image_title
+        )
+        session.history[-1]["content"] = clean_reply
+    else:
+        clean_reply = result["reply"]
+        chat_title = None
+        image_title = None
+
+    # Rename block in session.blocks if image was retitled
+    orig_block_id = image.filename if image else None
+    if image_title and orig_block_id and orig_block_id in session.blocks and orig_block_id != image_title:
+        session.blocks[image_title] = session.blocks.pop(orig_block_id)
+        session.blocks[image_title]["id"] = image_title
 
     # Persist display messages
     user_image_url = f"/{image_path}" if image_path else None
@@ -191,33 +254,29 @@ def send():
     database.save_display_message(
         active_chat_id, "user", text,
         image_url=user_image_url, metadata=user_metadata)
-    database.save_display_message(active_chat_id, "assistant", result["reply"])
+    database.save_display_message(active_chat_id, "assistant", clean_reply)
 
     # Persist blocks
     for block_id, meta in session.blocks.items():
         database.upsert_block(active_chat_id, block_id, meta)
 
-    # Persist history (after image_tokens are set and block possibly renamed)
+    # Persist history
     database.save_history(active_chat_id, session.history, session.blocks)
 
     # Update chat title in DB
-    if result.get("chat_title"):
-        database.update_chat_title(active_chat_id, result["chat_title"])
+    if chat_title:
+        database.update_chat_title(active_chat_id, chat_title)
 
     # Handle image block rename in DB
-    if result.get("image_title") and image:
-        orig = image.filename
-        new_name = result["image_title"]
-        if orig != new_name:
-            database.rename_block(active_chat_id, orig, new_name)
-            # Re-save history with updated block key after rename
-            database.save_history(active_chat_id, session.history, session.blocks)
+    if image_title and orig_block_id and orig_block_id != image_title:
+        database.rename_block(active_chat_id, orig_block_id, image_title)
+        database.save_history(active_chat_id, session.history, session.blocks)
 
-    response = {"reply": result["reply"]}
-    if result.get("chat_title"):
-        response["chat_title"] = result["chat_title"]
-    if result.get("image_title"):
-        response["image_title"] = result["image_title"]
+    response = {"reply": clean_reply}
+    if chat_title:
+        response["chat_title"] = chat_title
+    if image_title:
+        response["image_title"] = image_title
 
     return jsonify(response)
 
