@@ -140,5 +140,72 @@
 - Token estimates are rough (character count / 4) — same estimation used throughout the app
 
 ### Current state
-- M6: complete
-- All milestones (1–6) implemented
+- M7 features (health bar + action bar): complete
+- Note: these features were mislabeled as M6 in this session; the real M6 (Algorithm Implementation) was implemented in the next session.
+
+---
+
+## Session: 2026-06-29 — Milestone 6: Lethe Multimodal PDF Compression Algorithm
+
+### What was implemented
+
+#### `backend/lethe.py` — Phase 2 two-track PDF compression
+
+Replaced the Phase 1 `_compress_pdf` stub with the full multimodal algorithm described in ARCHITECTURE.md.
+
+**`_compress_pdf`** (new entry point)
+- Tries to import `fitz` (pymupdf); falls back to `_compress_pdf_phase1` if unavailable or if PDF parsing fails
+- Builds conversation transcript, calls `_parse_pdf_content`, then runs both tracks in sequence
+- Merge: if both tracks produced output, calls `_merge_pdf_tracks`; if only text, returns text summary; if only images, joins their summaries
+- Replaces the native `document` block in `self.history[msg_index]` with the compressed text summary
+- Returns same `{compressed, original_tokens, summary_tokens}` dict as all other compress methods
+
+**`_parse_pdf_content`** (new)
+- Opens PDF with `fitz.open(pdf_path)`, iterates pages
+- Text: calls `page.get_text("blocks")`, filters to type-0 (text) blocks longer than 20 chars, groups into per-page `text_sections` with label, text, page number
+- Images: calls `page.get_images(full=True)` per page, deduplicates by xref, extracts image bytes via `doc.extract_image(xref)`, skips images < 500 bytes (decorative), caps at 8 images total; attaches surrounding page text (first 600 chars) and figure references (`re.findall(r'Fig(?:ure)?\.?\s*\d+')`) to each image block
+
+**`_score_pdf_sections`** (new)
+- Sends conversation transcript + per-page text previews (250 chars each) to the LLM
+- Asks it to assign engagement tiers: 1 (directly discussed), 2 (briefly referenced), 3 (never mentioned)
+- Parses JSON object from response; defaults missing pages to tier 3
+
+**`_summarize_pdf_text_track`** (new)
+- Sends all text sections with their tiers (truncated to 1200 chars each) + transcript to LLM
+- Instructs tiered compression: Tier 1 = full detail, Tier 2 = 2-3 sentences, Tier 3 = 1 sentence
+- Returns a single flowing summary starting with a 1-sentence document overview
+
+**`_summarize_pdf_image_track`** (new)
+- For each extracted image: encodes as base64, sends to LLM as vision request with surrounding document text and conversation transcript
+- Returns list of `{label, page, summary}` dicts
+- Individual image failures are caught and skipped (logged to stdout)
+
+**`_merge_pdf_tracks`** (new)
+- Sends both track summaries + conversation context to LLM
+- Instructs it to combine into a single summary that preserves text-figure relationships
+- Returns final merged output
+
+**`_compress_pdf_phase1`** (renamed from old `_compress_pdf`)
+- Unchanged behavior: conversational-only summarization without PDF parsing
+- Used as fallback when pymupdf is not installed or PDF parsing throws
+
+#### `backend/requirements.txt`
+- Added `pymupdf` (already installed as version 1.27.2.3)
+
+### Tested
+- `python -c "import lethe"` → OK (no syntax errors)
+- All 7 new/renamed methods verified present on `ContextSession` instance
+- `import fitz; fitz.Document()` → OK, version 1.27.2.3
+- Backend starts cleanly (`* Running on http://127.0.0.1:5000`)
+- No frontend changes needed — `/compress` endpoint contract unchanged
+
+### Issues / decisions
+- Image cap at 8: PDFs with many figures could be slow (8 vision API calls); cap keeps compression time reasonable. Increase later if needed.
+- Surrounding text: uses full page text (not bounding box proximity) for simplicity and pymupdf version compatibility. Works well because images usually have related text on the same page.
+- If text extraction yields nothing and no images are found (e.g. scanned PDF), falls back to Phase 1 rather than failing silently.
+- Phase 1 is now named `_compress_pdf_phase1` so it remains callable as an explicit fallback.
+
+### Current state
+- M6 (Algorithm Implementation): complete
+- M7 (Context health bar + message action bar): complete (implemented in previous session, mislabeled as M6)
+- All 7 milestones implemented

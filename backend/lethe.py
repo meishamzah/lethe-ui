@@ -579,10 +579,295 @@ Be concise. This summary replaces the raw file content in conversation history."
         }
 
     def _compress_pdf(self, block_id):
+        """Phase 2: two-track multimodal PDF compression. Falls back to Phase 1 if pymupdf unavailable."""
+        try:
+            import fitz
+        except ImportError:
+            print("pymupdf not installed — falling back to Phase 1 PDF compression")
+            return self._compress_pdf_phase1(block_id)
+
+        msg_index = self.blocks[block_id]["message_index"]
+        original_tokens = self.blocks[block_id].get("pdf_tokens", 0)
+        pdf_path = self.blocks[block_id].get("path", "")
+
+        transcript_lines = []
+        for i, msg in enumerate(self.history):
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, str):
+                transcript_lines.append(f"[{i}] {role}: {content[:300]}")
+            elif isinstance(content, list):
+                for part in content:
+                    if part.get("type") == "text":
+                        transcript_lines.append(f"[{i}] {role}: {part['text'][:300]}")
+                    elif part.get("type") == "document":
+                        transcript_lines.append(f"[{i}] {role}: [PDF: {block_id}]")
+        transcript = "\n".join(transcript_lines)
+
+        try:
+            text_sections, image_blocks = self._parse_pdf_content(pdf_path, fitz)
+        except Exception as e:
+            print(f"PDF parsing failed ({e}) — falling back to Phase 1")
+            return self._compress_pdf_phase1(block_id)
+
+        text_summary = ""
+        if text_sections:
+            scores = self._score_pdf_sections(block_id, text_sections, transcript)
+            text_summary = self._summarize_pdf_text_track(block_id, text_sections, scores, transcript)
+
+        image_summaries = self._summarize_pdf_image_track(block_id, image_blocks, transcript)
+
+        if image_summaries and text_summary:
+            summary = self._merge_pdf_tracks(block_id, text_summary, image_summaries, transcript)
+        elif text_summary:
+            summary = text_summary
+        elif image_summaries:
+            summary = "\n\n".join(f"[{s['label']} (page {s['page']})]: {s['summary']}" for s in image_summaries)
+        else:
+            print("No content extracted from PDF — falling back to Phase 1")
+            return self._compress_pdf_phase1(block_id)
+
+        summary_tokens = int(len(summary) / 4)
+
+        if original_tokens > 0 and summary_tokens >= original_tokens:
+            print(f"⚠ Summary ({summary_tokens} tokens) is larger than original ({original_tokens} tokens). Compression not applied.")
+            return {
+                "compressed": False,
+                "reason": "summary_larger_than_original",
+                "original_tokens": original_tokens,
+                "summary_tokens": summary_tokens
+            }
+
+        orig_msg = self.history[msg_index]
+        if isinstance(orig_msg["content"], list):
+            new_content = []
+            replaced = False
+            for part in orig_msg["content"]:
+                if not replaced and part.get("type") == "document":
+                    new_content.append({"type": "text", "text": f"[Compressed PDF '{block_id}']:\n{summary}"})
+                    replaced = True
+                else:
+                    new_content.append(part)
+            self.history[msg_index]["content"] = new_content
+
+        self.blocks[block_id]["compressed"] = True
+        self.blocks[block_id]["summary"] = summary
+        self.blocks[block_id]["summary_tokens"] = summary_tokens
+
+        tokens_saved = original_tokens - summary_tokens if original_tokens > 0 else 0
+        pct = round((tokens_saved / original_tokens) * 100) if original_tokens else 0
+        print(f"\n✓ Compressed PDF '{block_id}' (two-track multimodal algorithm)")
+        if original_tokens:
+            print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")
+
+        return {
+            "compressed": True,
+            "original_tokens": original_tokens,
+            "summary_tokens": summary_tokens
+        }
+
+    def _parse_pdf_content(self, pdf_path, fitz):
+        """Extract per-page text sections and embedded images from a PDF."""
+        doc = fitz.open(pdf_path)
+        text_sections = []
+        image_blocks = []
+        seen_xrefs = set()
+
+        for page_num, page in enumerate(doc):
+            raw_blocks = page.get_text("blocks")
+            page_text_blocks = []
+            for b in raw_blocks:
+                if len(b) >= 7 and b[6] == 0:  # 0 = text block
+                    text = b[4].strip()
+                    if len(text) > 20:
+                        page_text_blocks.append({
+                            "bbox": (b[0], b[1], b[2], b[3]),
+                            "text": text
+                        })
+
+            if page_text_blocks:
+                page_text = "\n".join(tb["text"] for tb in page_text_blocks)
+                text_sections.append({
+                    "page": page_num + 1,
+                    "label": f"Page {page_num + 1}",
+                    "text": page_text,
+                })
+
+            if len(image_blocks) < 8:
+                page_text_joined = " ".join(tb["text"] for tb in page_text_blocks)
+                for img_tuple in page.get_images(full=True):
+                    xref = img_tuple[0]
+                    if xref in seen_xrefs or xref == 0:
+                        continue
+                    seen_xrefs.add(xref)
+                    if len(image_blocks) >= 8:
+                        break
+                    try:
+                        base_image = doc.extract_image(xref)
+                    except Exception:
+                        continue
+                    if not base_image or len(base_image.get("image", b"")) < 500:
+                        continue
+                    fig_refs = re.findall(r'[Ff]ig(?:ure)?\.?\s*\d+', page_text_joined)
+                    image_blocks.append({
+                        "page": page_num + 1,
+                        "xref": xref,
+                        "data": base_image["image"],
+                        "ext": base_image.get("ext", "png"),
+                        "surrounding_text": page_text_joined[:600],
+                        "figure_refs": fig_refs[:2],
+                    })
+
+        doc.close()
+        return text_sections, image_blocks
+
+    def _score_pdf_sections(self, block_id, text_sections, transcript):
+        """Ask the LLM to assign engagement tiers (1/2/3) to each text section."""
+        section_previews = "\n".join(
+            f"{s['label']}: {s['text'][:250].replace(chr(10), ' ')}..."
+            for s in text_sections
+        )
+
+        scanner_prompt = f"""You are analyzing a conversation about a PDF called '{block_id}'.
+
+Conversation transcript:
+{transcript}
+
+PDF sections (one per page):
+{section_previews}
+
+For each section assign an engagement tier:
+1 = directly questioned, quoted, or discussed in detail
+2 = mentioned or briefly referenced
+3 = never appeared in the conversation
+
+Respond ONLY with a JSON object. Example: {{"Page 1": 1, "Page 2": 3, "Page 3": 2}}"""
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": scanner_prompt}]
+        )
+        raw = response.content[0].text.strip()
+        match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+        if match:
+            try:
+                scores = json.loads(match.group())
+                for s in text_sections:
+                    if s["label"] not in scores:
+                        scores[s["label"]] = 3
+                return scores
+            except Exception:
+                pass
+        return {s["label"]: 3 for s in text_sections}
+
+    def _summarize_pdf_text_track(self, block_id, text_sections, scores, transcript):
+        """Generate a single tiered summary covering all text sections."""
+        sections_str = "\n\n".join(
+            f"[{s['label']} — Tier {scores.get(s['label'], 3)}]\n{s['text'][:1200]}"
+            for s in text_sections
+        )
+
+        summarize_prompt = f"""You are a context compression assistant.
+
+A PDF called '{block_id}' was shared in a conversation.
+
+Conversation transcript:
+{transcript}
+
+PDF text sections with engagement tiers:
+{sections_str}
+
+Write a unified summary:
+- Tier 1 sections: detailed summary — preserve specific numbers, findings, and arguments the user discussed
+- Tier 2 sections: 2-3 sentences covering the core finding or argument
+- Tier 3 sections: 1 sentence only — never skip, preserve the document map
+
+Start with a 1-sentence overview of the whole document, then cover sections in order. Be concise."""
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": summarize_prompt}]
+        )
+        return response.content[0].text
+
+    def _summarize_pdf_image_track(self, block_id, image_blocks, transcript):
+        """Summarize each embedded PDF image using its document context and the conversation."""
+        summaries = []
+        for img in image_blocks:
+            try:
+                img_data = base64.standard_b64encode(img["data"]).decode("utf-8")
+                ext = img.get("ext", "png").lower()
+                media_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif"}.get(ext, "image/png")
+                label = img["figure_refs"][0] if img.get("figure_refs") else f"figure on page {img['page']}"
+
+                summarize_prompt = f"""You are a context compression assistant.
+
+This image is embedded in a PDF called '{block_id}' ({label}, page {img['page']}).
+
+Surrounding document text:
+{img['surrounding_text'] or '(none)'}
+
+Conversation transcript:
+{transcript[:800]}
+
+Describe this image in 2-4 sentences: what it shows, key data or labels visible, and its relevance to what was discussed."""
+
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=200,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}},
+                            {"type": "text", "text": summarize_prompt}
+                        ]
+                    }]
+                )
+                summaries.append({
+                    "label": label,
+                    "page": img["page"],
+                    "summary": response.content[0].text.strip()
+                })
+            except Exception as e:
+                print(f"Could not summarize PDF image on page {img['page']}: {e}")
+        return summaries
+
+    def _merge_pdf_tracks(self, block_id, text_summary, image_summaries, transcript):
+        """Merge text and image track summaries into a single coherent compressed output."""
+        image_track_str = "\n".join(
+            f"[{s['label'].capitalize()} (page {s['page']})]: {s['summary']}"
+            for s in image_summaries
+        )
+
+        merge_prompt = f"""You are a context compression assistant.
+
+You have two compression tracks from a PDF called '{block_id}':
+
+TEXT TRACK:
+{text_summary}
+
+IMAGE TRACK:
+{image_track_str}
+
+Conversation context:
+{transcript[:600]}
+
+Combine into a single coherent compressed summary. Preserve relationships between text sections and figures (e.g. "Figure 2 showed X, which section 3 explained as Y"). Focus on what was actually discussed. Be concise."""
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": merge_prompt}]
+        )
+        return response.content[0].text
+
+    def _compress_pdf_phase1(self, block_id):
+        """Phase 1 fallback: conversational summarization without PDF parsing."""
         msg_index = self.blocks[block_id]["message_index"]
         original_tokens = self.blocks[block_id].get("pdf_tokens", 0)
 
-        # build transcript (excluding the PDF document block)
         transcript = []
         for i, msg in enumerate(self.history):
             role = msg["role"]
@@ -651,7 +936,7 @@ Be concise. This summary replaces the PDF in conversation history."""
 
         tokens_saved = original_tokens - summary_tokens if original_tokens > 0 else 0
         pct = round((tokens_saved / original_tokens) * 100) if original_tokens else 0
-        print(f"\n✓ Compressed '{block_id}'")
+        print(f"\n✓ Compressed '{block_id}' (Phase 1 fallback)")
         if original_tokens:
             print(f"Tokens: ~{original_tokens:,} → ~{summary_tokens:,} ({pct}% reduction)")
         return {
