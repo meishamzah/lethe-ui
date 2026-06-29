@@ -101,9 +101,9 @@ function FileIcon({ type, compressed }) {
   if (type === "code") return (
     <div style={box}>
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <path d="M5 5L3 8L5 11" stroke={teal} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        <path d="M11 5L13 8L11 11" stroke={teal} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        <path d="M9 3.5L7 12.5" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
+        <path d="M5 5L3 8L5 11" stroke={teal} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M11 5L13 8L11 11" stroke={teal} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M9 3.5L7 12.5" stroke={accent} strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     </div>
   )
@@ -115,9 +115,9 @@ function FileIcon({ type, compressed }) {
   return (
     <div style={box}>
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <line x1="2" y1="4" x2="12" y2="4" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
-        <line x1="2" y1="7" x2="12" y2="7" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
-        <line x1="2" y1="10" x2="8" y2="10" stroke={accent} strokeWidth="1.5" strokeLinecap="round"/>
+        <line x1="2" y1="4" x2="12" y2="4" stroke={accent} strokeWidth="1.5" strokeLinecap="round" />
+        <line x1="2" y1="7" x2="12" y2="7" stroke={accent} strokeWidth="1.5" strokeLinecap="round" />
+        <line x1="2" y1="10" x2="8" y2="10" stroke={accent} strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     </div>
   )
@@ -260,7 +260,7 @@ export default function App() {
         localStorage.removeItem("lethe_guest_id")
         document.cookie = "lethe_guest_id=; path=/; max-age=0"
       }
-    }).catch(() => {})
+    }).catch(() => { })
     fetchChats()
   }, [])
 
@@ -289,7 +289,7 @@ export default function App() {
     if (newSettings.defaultStatusFilter !== settings.defaultStatusFilter) setStatusFilter(newSettings.defaultStatusFilter)
     if (newSettings.panelOpenByDefault !== settings.panelOpenByDefault) setPanelOpen(newSettings.panelOpenByDefault)
     setSettings(newSettings)
-    try { localStorage.setItem("lethe_settings", JSON.stringify(newSettings)) } catch {}
+    try { localStorage.setItem("lethe_settings", JSON.stringify(newSettings)) } catch { }
   }
 
   const handleClearHistory = () => setMessages([])
@@ -300,7 +300,7 @@ export default function App() {
       const data = await res.json()
       setChats([{ id: data.chat_id, title: "New Chat" }])
       setActiveChatId(data.chat_id)
-    } catch {}
+    } catch { }
     setBlocks({})
     setPreviews({})
     setSelected([])
@@ -581,7 +581,7 @@ export default function App() {
                     <div style={styles.planBadge}>{authUser.plan === "pro" ? "Pro" : "Free"}</div>
                     <button
                       style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 10, padding: 0 }}
-                      onClick={() => apiFetch("/auth/logout", { method: "POST" }).then(() => { setAuthUser(null); setSentCount(0); setNudgeDismissed(false) }).catch(() => {})}
+                      onClick={() => apiFetch("/auth/logout", { method: "POST" }).then(() => { setAuthUser(null); setSentCount(0); setNudgeDismissed(false) }).catch(() => { })}
                     >Sign out</button>
                   </div>
                 </div>
@@ -600,8 +600,8 @@ export default function App() {
             )}
             <button style={styles.gearBtn} onClick={() => setShowSettings(true)} title="Settings">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
           </div>
@@ -733,13 +733,13 @@ export default function App() {
                 {pendingFile.type === "image"
                   ? <img src={pendingFile.preview} style={styles.imageThumb} />
                   : <div style={styles.fileChip}>
-                      <span style={{ fontSize: 14 }}>
-                        {pendingFile.type === "code" ? "📄" : pendingFile.type === "pdf" ? "📑" : "📝"}
-                      </span>
-                      <span style={{ fontSize: 11, color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }}>
-                        {pendingFile.file.name}
-                      </span>
-                    </div>
+                    <span style={{ fontSize: 14 }}>
+                      {pendingFile.type === "code" ? "📄" : pendingFile.type === "pdf" ? "📑" : "📝"}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }}>
+                      {pendingFile.file.name}
+                    </span>
+                  </div>
                 }
                 <button style={styles.removeImg} onClick={() => setPendingFile(null)}>✕</button>
               </div>
@@ -803,12 +803,12 @@ export default function App() {
                   onClick={() => setViewMode("list")}
                 >
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <line x1="4" y1="3" x2="12" y2="3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                    <line x1="4" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                    <line x1="4" y1="11" x2="12" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                    <circle cx="2" cy="3" r="1" fill="currentColor"/>
-                    <circle cx="2" cy="7" r="1" fill="currentColor"/>
-                    <circle cx="2" cy="11" r="1" fill="currentColor"/>
+                    <line x1="4" y1="3" x2="12" y2="3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <line x1="4" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <line x1="4" y1="11" x2="12" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <circle cx="2" cy="3" r="1" fill="currentColor" />
+                    <circle cx="2" cy="7" r="1" fill="currentColor" />
+                    <circle cx="2" cy="11" r="1" fill="currentColor" />
                   </svg>
                 </button>
                 <button
@@ -817,10 +817,10 @@ export default function App() {
                   onClick={() => setViewMode("tile")}
                 >
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/>
-                    <rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/>
-                    <rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/>
-                    <rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                    <rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
                   </svg>
                 </button>
                 <button
@@ -829,9 +829,9 @@ export default function App() {
                   onClick={() => setViewMode("detailed")}
                 >
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <rect x="1" y="1" width="12" height="6" rx="1" stroke="currentColor" strokeWidth="1.5"/>
-                    <line x1="1" y1="10" x2="9" y2="10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                    <line x1="1" y1="13" x2="6" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    <rect x="1" y="1" width="12" height="6" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                    <line x1="1" y1="10" x2="9" y2="10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <line x1="1" y1="13" x2="6" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                   </svg>
                 </button>
               </div>
@@ -1071,7 +1071,7 @@ export default function App() {
           width="16" height="16" viewBox="0 0 16 16" fill="none"
           style={{ transition: "transform 0.2s ease", transform: panelOpen ? "rotate(0deg)" : "rotate(180deg)" }}
         >
-          <polyline points="6,4 10,8 6,12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+          <polyline points="6,4 10,8 6,12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </div>
 
