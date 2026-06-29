@@ -167,7 +167,8 @@ class ContextSession:
         self.history.append({"role": "assistant", "content": raw_reply})
 
         if image_path:
-            self.blocks[block_id]["image_tokens"] = self._estimate_image_tokens(image_path)
+            text_tokens = len(text) // 4
+            self.blocks[block_id]["image_tokens"] = response.usage.input_tokens - text_tokens
 
         return {"reply": raw_reply}
     

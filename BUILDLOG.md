@@ -209,3 +209,54 @@ Replaced the Phase 1 `_compress_pdf` stub with the full multimodal algorithm des
 - M6 (Algorithm Implementation): complete
 - M7 (Context health bar + message action bar): complete (implemented in previous session, mislabeled as M6)
 - All 7 milestones implemented
+
+---
+
+## Session: 2026-06-29 — Landing Page + Routing
+
+### What was implemented
+
+#### `frontend/src/LandingPage.jsx` (new file)
+- Full landing page converted from `frontend/Lethe Landing.html` (bundled design export)
+- Checks `/auth/me` on mount — redirects authenticated users to `/chat` immediately
+- "Start for free" buttons → `navigate("/chat")` via React Router
+- "Log in with Google" buttons → `window.location.href = API + "/auth/google"`
+- All nav anchor links (`#how`, `#features`) work as smooth-scroll page anchors
+- Includes: nav, hero section, product mockup (CSS-rendered app screenshot), "How it works" (3 steps), features (4 cards), CTA band, footer
+- Fully responsive: mockup sidebars hidden on ≤900px, grids collapse to 1 column on mobile
+
+#### `frontend/src/main.jsx` (updated)
+- Added `react-router-dom` BrowserRouter
+- `/` → `LandingPage`
+- `/chat` → `App` (existing chat interface)
+
+#### `frontend/src/index.css` (updated)
+- Removed `body { overflow: hidden; }` — App.jsx root div already has `overflow: hidden` inline; body-level was blocking landing page scroll
+- Added `html { scroll-behavior: smooth; }` for anchor link animation
+- Added landing page CSS classes: `.lh-cta-primary`, `.lh-cta-secondary`, `.lh-nav-link`, `.lh-feature`, `.lh-how-grid`, `.lh-feat-grid`
+- Added responsive media queries for landing page grids and mockup
+
+#### `backend/auth.py` (updated)
+- `google_callback`: redirect changed from `{frontend_url}?auth_token=...` to `{frontend_url}/chat?auth_token=...`
+- App.jsx already reads `auth_token` from `window.location.search` which works unchanged at the `/chat` route
+
+#### `frontend/src/App.jsx` (updated)
+- Sign-out handler simplified: after clearing auth/localStorage/cookie, does `window.location.href = "/"` to redirect to landing page
+- Removed the post-logout `/new_chat` call and state resets — these happen naturally when the user enters `/chat` fresh
+
+### Packages installed
+- `react-router-dom` (4 packages, 0 vulnerabilities)
+
+### Tested
+- `npm run build` → clean (257 modules, 0 errors)
+- Backend import check → OK
+
+### Issues / decisions
+- The bundled HTML file (`Lethe Landing.html`) is a design-tool export with base64-encoded compressed assets — too large to read directly. Content extracted via PowerShell string parsing to reconstruct the visual structure.
+- Used `window.location.href = "/"` for sign-out redirect (full page navigation) rather than React Router `navigate` — avoids importing useNavigate into App.jsx and gives a clean slate on the App component.
+
+### Current state
+- Landing page live at `/`
+- Chat interface at `/chat`
+- OAuth redirect goes to `/chat` after login
+- Sign-out returns to `/`

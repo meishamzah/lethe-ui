@@ -669,25 +669,7 @@ export default function App() {
                         const newGid = "guest_" + Math.random().toString(36).slice(2, 18)
                         localStorage.setItem("lethe_guest_id", newGid)
                         document.cookie = `lethe_guest_id=${newGid}; path=/; max-age=31536000; SameSite=Lax`
-                        setAuthUser(null)
-                        setSentCount(0)
-                        setNudgeDismissed(false)
-                        setMessages([])
-                        setBlocks({})
-                        setPreviews({})
-                        setSelected([])
-                        setPendingFile(null)
-                        setCompressionMsg(null)
-                        setCompressionMsgFading(false)
-                        try {
-                          const res = await apiFetch("/new_chat", { method: "POST" })
-                          const data = await res.json()
-                          setChats([{ id: data.chat_id, title: "New Chat" }])
-                          setActiveChatId(data.chat_id)
-                        } catch {
-                          setChats([])
-                          setActiveChatId(null)
-                        }
+                        window.location.href = "/"
                       }}
                     >Sign out</button>
                   </div>

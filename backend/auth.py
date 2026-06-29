@@ -115,7 +115,7 @@ def google_callback():
     # so the session cookie is set with proper CORS headers (not via a redirect)
     auth_token = _make_auth_token(user_id, guest_id)
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
-    resp = redirect(f"{frontend_url}?auth_token={auth_token}")
+    resp = redirect(f"{frontend_url}/chat?auth_token={auth_token}")
     if guest_id:
         resp.delete_cookie("lethe_guest_id")
     return resp
