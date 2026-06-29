@@ -183,6 +183,8 @@ export default function App() {
   const [authUser, setAuthUser] = useState(null)
   const [sentCount, setSentCount] = useState(0)
   const [nudgeDismissed, setNudgeDismissed] = useState(false)
+  const [hoveredMsgIdx, setHoveredMsgIdx] = useState(null)
+  const [copiedMsgIdx, setCopiedMsgIdx] = useState(null)
 
   // ── Persistence: load chats on mount ──────────────────────────────────────
 
@@ -487,9 +489,51 @@ export default function App() {
     }
   }
 
+  const handleCopy = (content, idx) => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopiedMsgIdx(idx)
+      setTimeout(() => setCopiedMsgIdx(prev => prev === idx ? null : prev), 1500)
+    }).catch(() => {})
+  }
+
+  const handleRetry = async () => {
+    setMessages(prev => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].role === "assistant") return prev.slice(0, i)
+      }
+      return prev
+    })
+    setLoading(true)
+    try {
+      const res = await apiFetch("/retry", { method: "POST" })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setMessages(prev => [...prev, { role: "assistant", content: data.reply }])
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", content: "Error reaching backend." }])
+    }
+    setLoading(false)
+  }
+
+  const handleCompressNow = () => {
+    const ids = Object.entries(blocks)
+      .filter(([, m]) => !m.compressed)
+      .map(([id]) => id)
+    if (!ids.length) return
+    setSelected(ids)
+    if (!panelOpen) setPanelOpen(true)
+    setShowConfirm(true)
+  }
+
   const totalTokens = Object.values(blocks).reduce((sum, b) => sum + getBlockTokens(b), 0)
   const savedTokens = Object.values(blocks).reduce((sum, b) =>
     b.compressed ? sum + getBlockTokens(b) - (b.summary_tokens || 0) : sum, 0)
+
+  const CONTEXT_LIMIT = 200000
+  const msgTokens = messages.reduce((sum, m) => sum + Math.round((m.content?.length || 0) / 4), 0)
+  const contextTokens = msgTokens + (totalTokens - savedTokens)
+  const contextPct = messages.length === 0 ? 0 : Math.min(100, Math.round(contextTokens / CONTEXT_LIMIT * 100))
+  const contextColor = contextPct < 50 ? "#4ECDC4" : contextPct < 70 ? "#c8a020" : contextPct < 85 ? "#e07820" : "#e05555"
 
   const filteredBlocks = Object.entries(blocks).filter(([, meta]) => {
     const statusOk = statusFilter === "all"
@@ -668,7 +712,12 @@ export default function App() {
             </div>
           )}
           {messages.map((msg, i) => (
-            <div key={i} style={msg.role === "user" ? styles.userMsg : styles.assistantMsg}>
+            <div
+              key={i}
+              style={msg.role === "user" ? styles.userMsg : styles.assistantMsg}
+              onMouseEnter={() => setHoveredMsgIdx(i)}
+              onMouseLeave={() => setHoveredMsgIdx(null)}
+            >
               <div style={styles.msgRole}>{msg.role === "user" ? "You" : "Lethe"}</div>
               {msg.image && (
                 <img
@@ -688,6 +737,55 @@ export default function App() {
               <div style={styles.msgContent} className="msg-content">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
               </div>
+              {hoveredMsgIdx === i && (
+                <div style={{
+                  display: "flex", gap: 1, marginTop: 5,
+                  justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                  animation: "fadeIn 0.15s ease"
+                }}>
+                  <button
+                    className="action-btn"
+                    title="Copy"
+                    style={styles.actionBtn}
+                    onClick={() => handleCopy(msg.content, i)}
+                  >
+                    {copiedMsgIdx === i ? (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M2 7l4 4 6-7" stroke="#4ECDC4" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    ) : (
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <rect x="1" y="4" width="8" height="9" rx="1" stroke="currentColor" strokeWidth="1.3"/>
+                        <path d="M4 4V3a1 1 0 011-1h7a1 1 0 011 1v8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                      </svg>
+                    )}
+                  </button>
+                  {msg.role === "assistant" && i === messages.length - 1 && (
+                    <button className="action-btn" title="Retry" style={styles.actionBtn} onClick={handleRetry}>
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M13 7A6 6 0 112 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                        <path d="M13 1.5v5H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                  )}
+                  {msg.role === "assistant" && (
+                    <>
+                      <button className="action-btn" title="Good response" style={styles.actionBtn} onClick={() => {}}>
+                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                          <path d="M5 6.5L6.5 2l1 1v4h3.5L10 12H4.5V6.5H5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                          <rect x="1.5" y="6.5" width="3" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+                        </svg>
+                      </button>
+                      <button className="action-btn" title="Bad response" style={styles.actionBtn} onClick={() => {}}>
+                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                          <path d="M9 7.5L7.5 12l-1-1V7.5H3L4 2h6v5.5H9z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+                          <rect x="10" y="2" width="3" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+                        </svg>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           ))}
           {loading && settings.showTypingAnimation && (
@@ -746,6 +844,45 @@ export default function App() {
               setPendingFile({ file, type: "pdf" })
             }}
           />
+
+          {/* Context health bar */}
+          {messages.length > 0 && (
+            <div style={{ width: "100%", maxWidth: 700, marginBottom: 8 }}>
+              {contextPct >= 50 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: contextColor, flex: 1, lineHeight: 1.4 }}>
+                    {contextPct >= 85
+                      ? "Context almost full — compress to continue chatting effectively."
+                      : contextPct >= 70
+                      ? "Compress now for the best experience."
+                      : "Your context is getting full. Consider compressing some blocks."}
+                  </span>
+                  {contextPct >= 70 && (
+                    <button
+                      onClick={handleCompressNow}
+                      style={{ background: contextColor, border: "none", color: "#0F0F0F", fontSize: 11, fontWeight: 600, padding: "3px 9px", borderRadius: 4, cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}
+                    >
+                      Compress now
+                    </button>
+                  )}
+                </div>
+              )}
+              <div style={{ height: 3, background: "#1F1F1F", borderRadius: 2, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${contextPct}%`,
+                  background: contextColor,
+                  borderRadius: 2,
+                  transition: "width 0.4s ease, background 0.3s ease"
+                }}/>
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 3 }}>
+                <span style={{ fontSize: 10, color: "#3A3A3A", fontFamily: "'Courier New', monospace" }}>
+                  {contextPct}% · ~{contextTokens.toLocaleString()} / {CONTEXT_LIMIT.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          )}
 
           <div style={styles.inputWrapper}>
             {pendingFile && (
@@ -1196,7 +1333,7 @@ const styles = {
   msgRole: { fontSize: 11, color: "#888", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" },
   msgContent: { fontSize: 14, lineHeight: 1.6, background: "#1A1A1A", padding: "12px 16px", borderRadius: 10 },
   attachedFileBadge: { display: "inline-flex", alignItems: "center", gap: 6, background: "#1A1A1A", border: "1px solid #2A2A2A", borderRadius: 6, padding: "4px 8px", marginBottom: 6 },
-  inputArea: { padding: "16px 48px 24px", display: "flex", justifyContent: "center" },
+  inputArea: { padding: "16px 48px 24px", display: "flex", flexDirection: "column", alignItems: "center" },
   inputWrapper: { width: "100%", maxWidth: 700, background: "#1A1A1A", border: "1px solid #2A2A2A", borderRadius: 16, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 },
   inputRow: { display: "flex", alignItems: "center", gap: 8 },
   input: { flex: 1, background: "transparent", border: "none", color: "#E8E8E8", fontSize: 14, resize: "none", outline: "none", fontFamily: "inherit", padding: "0" },
@@ -1247,4 +1384,5 @@ const styles = {
   imageThumb: { width: 48, height: 48, objectFit: "cover", borderRadius: 6 },
   removeImg: { background: "#2A2A2A", border: "none", color: "#888", borderRadius: "50%", width: 20, height: 20, cursor: "pointer", fontSize: 10 },
   fileChip: { display: "flex", alignItems: "center", gap: 6, background: "#2A2A2A", borderRadius: 6, padding: "6px 10px" },
+  actionBtn: { background: "none", border: "none", color: "#555", cursor: "pointer", padding: "4px 5px", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, fontFamily: "inherit" },
 }

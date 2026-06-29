@@ -330,6 +330,14 @@ def _deserialize_history(history_json):
 
 # ── Messages ───────────────────────────────────────────────────────────────────
 
+def delete_last_display_message(chat_id, role):
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM messages WHERE id = ("
+            "  SELECT MAX(id) FROM messages WHERE chat_id=? AND role=?"
+            ")", (chat_id, role))
+        conn.commit()
+
 def save_display_message(chat_id, role, content, image_url=None, metadata=None):
     with get_db() as conn:
         conn.execute(

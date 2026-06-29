@@ -485,6 +485,44 @@ def compress():
     database.save_history(active_cid, sess.history, sess.blocks)
     return jsonify({"results": results})
 
+@app.route("/retry", methods=["POST"])
+def retry():
+    try:
+        sess = get_active_session()
+        if not sess:
+            return jsonify({"error": "No active session"}), 400
+        if not sess.history or sess.history[-1]["role"] != "assistant":
+            return jsonify({"error": "Nothing to retry"}), 400
+
+        sess.history.pop()  # remove last assistant message
+
+        if not sess.history or sess.history[-1]["role"] != "user":
+            return jsonify({"error": "No preceding user message"}), 400
+
+        last_user = sess.history.pop()
+        content = last_user["content"]
+        if isinstance(content, str):
+            user_text = content
+        elif isinstance(content, list):
+            user_text = " ".join(p["text"] for p in content if p.get("type") == "text")
+        else:
+            user_text = ""
+
+        result = sess.send(user_text)
+        raw_reply = result["reply"]
+        clean_reply, _, _ = _clean_injected_reply(raw_reply, False, False)
+        if clean_reply != raw_reply:
+            sess.history[-1]["content"] = clean_reply
+
+        active_cid = _active_chat_id()
+        database.delete_last_display_message(active_cid, "assistant")
+        database.save_display_message(active_cid, "assistant", clean_reply)
+        database.save_history(active_cid, sess.history, sess.blocks)
+
+        return jsonify({"reply": clean_reply})
+    except Exception:
+        return jsonify({"error": "Retry failed"}), 500
+
 @app.route("/history", methods=["GET"])
 def history():
     sess = get_active_session()

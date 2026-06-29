@@ -95,3 +95,50 @@
 - Google OAuth: wired up, untested (no credentials in env)
 - Guest session flow: fully functional
 - Key pools: implemented, untested without pool keys in env
+
+---
+
+## Session: 2026-06-28 — Milestone 6: Context health bar + Message action bar
+
+### What was implemented
+
+#### Context health bar (frontend only)
+- Estimated context usage = message text tokens (content.length / 4) + active block tokens (totalTokens - savedTokens)
+- Fixed context limit: 200,000 (Anthropic Claude)
+- Thin 3px bar rendered above the input box, fills left to right as context fills
+- Color stages: teal <50%, amber 50-70%, orange 70-85%, red ≥85%
+- Nudge text appears at 50%+: "Your context is getting full…" / "Compress now…" / "Context almost full…"
+- "Compress now" button appears at 70%+: selects all uncompressed blocks and opens the confirm dialog
+- Token counter shown below bar: `N% · ~X / 200,000`
+- Bar animates width + color transitions with CSS
+
+#### Message action bar (frontend only)
+- Each message shows an action bar on hover, fades in at 0.15s
+- Left-aligned for assistant messages, right-aligned for user messages
+- **Copy** (all messages): copies raw markdown text, icon flips to green checkmark for 1.5s
+- **Retry** (last assistant message only): calls `POST /retry`, removes last AI message from UI, shows typing animation, replaces with new response
+- **Thumbs up / Thumbs down** (all assistant messages): UI only, no-op for now
+- All icons are inline SVGs, 13px, styled via `.action-btn` CSS class
+
+#### `POST /retry` endpoint (backend)
+- Pops last assistant message from `sess.history`
+- Pops last user message, extracts text (handles both string and list content)
+- Calls `sess.send(user_text)` to get a fresh response
+- Deletes last assistant display message from DB via `delete_last_display_message()`
+- Saves new assistant display message + updated history to DB
+
+#### `db.py`
+- Added `delete_last_display_message(chat_id, role)` — deletes highest-id message row for given role
+
+### Tested
+- `npx vite build` → clean, 0 errors
+- `python -c "import app"` → OK
+
+### Issues / decisions
+- Retry is text-only: if the original user message had file/image attachments, those are dropped on retry (only the text part is re-sent). This is acceptable for M6 scope.
+- Context bar always uses 200,000 as limit since only Claude/Anthropic is used as backend
+- Token estimates are rough (character count / 4) — same estimation used throughout the app
+
+### Current state
+- M6: complete
+- All milestones (1–6) implemented

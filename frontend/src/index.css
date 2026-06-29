@@ -296,3 +296,7 @@ button:active {
   background: #252525 !important;
   opacity: 1 !important;
 }
+
+/* Message action bar buttons */
+.action-btn { color: #555 !important; opacity: 1 !important; }
+.action-btn:hover { color: #E8E8E8 !important; background: #2A2A2A !important; opacity: 1 !important; }
