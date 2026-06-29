@@ -663,9 +663,32 @@ export default function App() {
                     <div style={styles.planBadge}>{authUser.plan === "pro" ? "Pro" : "Free"}</div>
                     <button
                       style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 10, padding: 0 }}
-                      onClick={() => apiFetch("/auth/logout", { method: "POST" })
-                        .then(() => { localStorage.clear(); window.location.reload() })
-                        .catch(() => window.location.reload())}
+                      onClick={async () => {
+                        try { await apiFetch("/auth/logout", { method: "POST" }) } catch { }
+                        localStorage.clear()
+                        const newGid = "guest_" + Math.random().toString(36).slice(2, 18)
+                        localStorage.setItem("lethe_guest_id", newGid)
+                        document.cookie = `lethe_guest_id=${newGid}; path=/; max-age=31536000; SameSite=Lax`
+                        setAuthUser(null)
+                        setSentCount(0)
+                        setNudgeDismissed(false)
+                        setMessages([])
+                        setBlocks({})
+                        setPreviews({})
+                        setSelected([])
+                        setPendingFile(null)
+                        setCompressionMsg(null)
+                        setCompressionMsgFading(false)
+                        try {
+                          const res = await apiFetch("/new_chat", { method: "POST" })
+                          const data = await res.json()
+                          setChats([{ id: data.chat_id, title: "New Chat" }])
+                          setActiveChatId(data.chat_id)
+                        } catch {
+                          setChats([])
+                          setActiveChatId(null)
+                        }
+                      }}
                     >Sign out</button>
                   </div>
                 </div>
