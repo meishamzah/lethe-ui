@@ -65,8 +65,11 @@ def _load_user(user_id):
 @auth_bp.route("/google")
 def google_login():
     if not os.getenv("GOOGLE_CLIENT_ID"):
-        return jsonify({"error": "Google OAuth not configured — set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET"}), 503
-    redirect_uri = url_for("auth.google_callback", _external=True)
+        return jsonify({"error": "Google OAuth not configured"}), 503
+    redirect_uri = os.getenv(
+        "OVERWRITE_REDIRECT_URI",
+        url_for("auth.google_callback", _external=True)
+    )
     return google.authorize_redirect(redirect_uri)
 
 @auth_bp.route("/google/callback")
