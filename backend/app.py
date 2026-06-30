@@ -136,15 +136,21 @@ class _LiteLLMMessages:
 
     def create(self, model=None, max_tokens=1024, messages=None):
         converted = self._convert(messages or [])
-        resp = litellm.completion(
-            model=self._model,
-            messages=converted,
-            max_tokens=max_tokens,
-            api_key=self._api_key,
-        )
-        text         = resp.choices[0].message.content or ""
-        input_tokens = getattr(resp.usage, "prompt_tokens", 0) or 0
-        return _LLMResponse(text, input_tokens)
+        print(f"[litellm] calling model={self._model} key_prefix={self._api_key[:8] if self._api_key else 'None'}", flush=True)
+        try:
+            resp = litellm.completion(
+                model=self._model,
+                messages=converted,
+                max_tokens=max_tokens,
+                api_key=self._api_key,
+            )
+            text         = resp.choices[0].message.content or ""
+            input_tokens = getattr(resp.usage, "prompt_tokens", 0) or 0
+            print(f"[litellm] success model={self._model} tokens={input_tokens}", flush=True)
+            return _LLMResponse(text, input_tokens)
+        except Exception as e:
+            print(f"[litellm] ERROR model={self._model}: {type(e).__name__}: {e}", flush=True)
+            raise
 
 class _LiteLLMClient:
     def __init__(self, model, api_key):
@@ -173,17 +179,20 @@ def _get_client_and_model_for_identity():
                 raw      = _decrypt_key(enc)
                 provider = (getattr(flask_login.current_user, "api_provider", None) or "anthropic").lower()
                 model    = _PROVIDER_MODEL.get(provider, "gemini/gemini-1.5-flash")
+                print(f"[client] branch=own-key provider={provider} model={model}", flush=True)
                 return _LiteLLMClient(model, raw), model
             except Exception as e:
-                print(f"[lethe] own-key client failed: {type(e).__name__}: {e}", flush=True)
+                print(f"[client] own-key client failed: {type(e).__name__}: {e}", flush=True)
         identity_id = flask_login.current_user.id
     else:
         identity_id = request.cookies.get("lethe_guest_id")
 
     pool_client = _gemini_client_from_pool(_GEMINI_CHAT_POOL, identity_id)
     if pool_client:
+        print(f"[client] branch=gemini-pool identity={identity_id} pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
         return pool_client, "gemini/gemini-1.5-flash"
 
+    print(f"[client] branch=anthropic-fallback pool_empty={not _GEMINI_CHAT_POOL} identity={identity_id}", flush=True)
     return _anthropic_client, "claude-sonnet-4-6"
 
 # ── Encryption ──────────────────────────────────────────────────────────────────
