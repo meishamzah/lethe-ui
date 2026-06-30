@@ -97,6 +97,15 @@ _PROVIDER_MODEL = {
     "openai":    "openai/gpt-4o-mini",
 }
 
+# Context window limits per model (tokens)
+_MODEL_CONTEXT_LIMITS = {
+    "gemini/gemini-3.5-flash":    1_000_000,
+    "gemini/gemini-1.5-flash":    1_000_000,
+    "anthropic/claude-sonnet-4-6": 200_000,
+    "claude-sonnet-4-6":           200_000,
+    "openai/gpt-4o-mini":          128_000,
+}
+
 # ── LiteLLM adapter ─────────────────────────────────────────────────────────────
 # Wraps LiteLLM to expose the same interface as the Anthropic SDK so lethe.py
 # can call .messages.create() without knowing which backend it's talking to.
@@ -575,6 +584,15 @@ def send():
     if image_title:
         response["image_title"] = image_title
     return jsonify(response)
+
+@app.route("/model_info", methods=["GET"])
+def model_info():
+    try:
+        _, model = _get_client_and_model_for_identity()
+        limit = _MODEL_CONTEXT_LIMITS.get(model, 200_000)
+        return jsonify({"model": model, "context_limit": limit})
+    except Exception:
+        return jsonify({"model": "unknown", "context_limit": 200_000})
 
 @app.route("/status", methods=["GET"])
 def status():

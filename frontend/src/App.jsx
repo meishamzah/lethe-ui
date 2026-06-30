@@ -189,6 +189,7 @@ export default function App() {
   const [hoveredMsgIdx, setHoveredMsgIdx] = useState(null)
   const [copiedMsgIdx, setCopiedMsgIdx] = useState(null)
   const [switchingChat, setSwitchingChat] = useState(false)
+  const [contextLimit, setContextLimit] = useState(200000)
 
   const { setIsTransitioning } = useContext(TransitionContext)
   const loadingStartRef = useRef(Date.now())
@@ -297,6 +298,9 @@ export default function App() {
           localStorage.removeItem("lethe_guest_id")
           document.cookie = "lethe_guest_id=; path=/; max-age=0"
         }
+      }).catch(() => { })
+      apiFetch("/model_info").then(r => r.json()).then(data => {
+        if (data.context_limit) setContextLimit(data.context_limit)
       }).catch(() => { })
       fetchChats()
     }
@@ -565,7 +569,7 @@ export default function App() {
   const savedTokens = Object.values(blocks).reduce((sum, b) =>
     b.compressed ? sum + getBlockTokens(b) - (b.summary_tokens || 0) : sum, 0)
 
-  const CONTEXT_LIMIT = 200000
+  const CONTEXT_LIMIT = contextLimit
   const msgTokens = messages.reduce((sum, m) => sum + Math.round((m.content?.length || 0) / 4), 0)
   const contextTokens = msgTokens + (totalTokens - savedTokens)
   const contextPct = messages.length === 0 ? 0 : Math.min(100, Math.round(contextTokens / CONTEXT_LIMIT * 100))
