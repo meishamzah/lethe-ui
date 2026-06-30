@@ -164,12 +164,76 @@ class _LiteLLMClient:
     def __init__(self, model, api_key):
         self.messages = _LiteLLMMessages(model, api_key)
 
+# ── Native Google Gemini adapter ─────────────────────────────────────────────────
+# Used for pool-based Gemini keys (AQ.* format, June 2026+). These keys work
+# against Gemini's native API but fail against the OpenAI-compatible transport
+# that LiteLLM's gemini/ route uses. Exposes the same .messages.create()
+# interface so ContextSession callers need no changes.
+
+from google import genai as _genai
+
+class _NativeGeminiMessages:
+    def __init__(self, model, api_key):
+        self._model  = model  # bare name, e.g. "gemini-1.5-flash"
+        self._client = _genai.Client(api_key=api_key)
+
+    @staticmethod
+    def _convert(messages):
+        """Translate Anthropic-format message list to google-genai contents format."""
+        out = []
+        for msg in messages:
+            role    = "model" if msg["role"] == "assistant" else "user"
+            content = msg["content"]
+            if isinstance(content, str):
+                out.append({"role": role, "parts": [{"text": content}]})
+                continue
+            parts = []
+            for part in content:
+                ptype = part.get("type")
+                if ptype == "text":
+                    parts.append({"text": part["text"]})
+                elif ptype == "image":
+                    src = part["source"]
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": src["media_type"],
+                            "data": src["data"],
+                        }
+                    })
+                elif ptype == "document":
+                    parts.append({"text": "[PDF document — not available via this provider]"})
+            if parts:
+                out.append({"role": role, "parts": parts})
+        return out
+
+    def create(self, model=None, max_tokens=1024, messages=None):
+        converted = self._convert(messages or [])
+        print(f"[gemini-native] calling model={self._model} msgs={len(converted)}", flush=True)
+        try:
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=converted,
+                config={"max_output_tokens": max_tokens},
+            )
+            text         = response.text or ""
+            um           = response.usage_metadata
+            input_tokens = (getattr(um, "prompt_token_count", 0) or 0) if um else 0
+            print(f"[gemini-native] success tokens={input_tokens}", flush=True)
+            return _LLMResponse(text, input_tokens)
+        except Exception as e:
+            print(f"[gemini-native] ERROR {type(e).__name__}: {e}", flush=True)
+            raise
+
+class _NativeGeminiClient:
+    def __init__(self, model, api_key):
+        self.messages = _NativeGeminiMessages(model, api_key)
+
 def _gemini_client_from_pool(pool, identity_id):
     """Pick a Gemini key from pool deterministically by identity, return adapter or None."""
     if not pool or not identity_id:
         return None
     idx = hash(str(identity_id)) % len(pool)
-    return _LiteLLMClient("gemini/gemini-1.5-flash", pool[idx])
+    return _NativeGeminiClient("gemini-1.5-flash", pool[idx])
 
 def _get_client_and_model_for_identity():
     """Return (client, model) for the current request's identity.
@@ -197,8 +261,8 @@ def _get_client_and_model_for_identity():
 
     pool_client = _gemini_client_from_pool(_GEMINI_CHAT_POOL, identity_id)
     if pool_client:
-        print(f"[client] branch=gemini-pool identity={identity_id} pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
-        return pool_client, "gemini/gemini-1.5-flash"
+        print(f"[client] branch=gemini-native-pool identity={identity_id} pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
+        return pool_client, "gemini-1.5-flash"
 
     print(f"[client] branch=anthropic-fallback pool_empty={not _GEMINI_CHAT_POOL} identity={identity_id}", flush=True)
     return _anthropic_client, "claude-sonnet-4-6"

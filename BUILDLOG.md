@@ -2,6 +2,49 @@
 
 ---
 
+## Session: 2026-06-30 — Switch Gemini pool path to native google-genai SDK
+
+### Root cause
+Google AI Studio's June 2026 key migration issued `AQ.*` format keys. These
+authenticate correctly against Gemini's native API but return auth errors against
+the OpenAI-compatible transport that LiteLLM's `gemini/` provider route uses.
+All pool-based Gemini requests were silently erroring and the exception was
+propagating unhandled, causing the Flask endpoint to return 500s or fall back
+to the Anthropic client depending on call site error handling.
+
+### Fix
+
+**`backend/app.py`**
+- Added `_NativeGeminiMessages` and `_NativeGeminiClient` adapter classes using
+  `google.genai.Client` directly. Interface is identical to `_LiteLLMClient`
+  (`.messages.create(model, max_tokens, messages)`) so no changes needed in
+  `ContextSession` or any caller.
+- Message conversion: Anthropic format → google-genai `contents` format. Role
+  mapping: `"assistant"` → `"model"`, `"user"` → `"user"`. Image blocks use
+  `inline_data` with `mime_type` + `data` fields (as confirmed from `Blob` type).
+  Document blocks downgrade to text stub (same as LiteLLM path).
+- Response extraction: `response.text` (shortcut property) for content;
+  `response.usage_metadata.prompt_token_count` for input tokens.
+- `_gemini_client_from_pool` now returns `_NativeGeminiClient("gemini-1.5-flash", key)`.
+  Model name has no `gemini/` prefix — that was a LiteLLM routing convention.
+- `_get_client_and_model_for_identity` pool branch now returns `"gemini-1.5-flash"`
+  (no prefix) to match.
+- Explicit `[gemini-native]` logging around the API call for visibility.
+- `_LiteLLMClient` / `_LiteLLMMessages` unchanged — still used for logged-in
+  users' own Anthropic/OpenAI keys.
+
+**`backend/requirements.txt`**
+- Added `google-genai`.
+
+### Flag: logged-in users with own Gemini key
+Users who register their own `provider=gemini` key in settings still route
+through LiteLLM (`_PROVIDER_MODEL["gemini"] = "gemini/gemini-1.5-flash"`). If
+those users also have AQ.* format keys, their requests will fail the same way
+the pool was failing. This path was left unchanged per instructions — needs a
+decision on whether to also swap it to the native adapter.
+
+---
+
 ## Session: 2026-06-30 — Fix model/client mismatch (Gemini traffic falling back to Claude)
 
 ### Root cause
