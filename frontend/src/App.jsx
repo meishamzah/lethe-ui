@@ -384,7 +384,10 @@ export default function App() {
     }
     setMessages(prev => [...prev, userMsg])
     setInput("")
-    if (textareaRef.current) textareaRef.current.style.height = "auto"
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto"
+      textareaRef.current.style.overflowY = "hidden"
+    }
     setPendingFile(null)
     setLoading(true)
     try {
@@ -952,12 +955,19 @@ export default function App() {
             )}
             <textarea
               ref={textareaRef}
-              style={{ ...styles.input, maxHeight: 200, overflowY: "auto" }}
+              style={{ ...styles.input, overflowY: "hidden" }}
               value={input}
               onChange={e => {
                 setInput(e.target.value)
-                e.target.style.height = "auto"
-                e.target.style.height = e.target.scrollHeight + "px"
+                const el = e.target
+                el.style.overflowY = "hidden"
+                el.style.height = "auto"
+                if (el.scrollHeight > 200) {
+                  el.style.height = "200px"
+                  el.style.overflowY = "auto"
+                } else {
+                  el.style.height = el.scrollHeight + "px"
+                }
               }}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
