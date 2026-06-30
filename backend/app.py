@@ -92,7 +92,7 @@ print(f"[init] GEMINI_API_KEY={_k('GEMINI_API_KEY')} "
 
 # Per-provider model IDs used with LiteLLM
 _PROVIDER_MODEL = {
-    "gemini":    "gemini/gemini-1.5-flash",
+    "gemini":    "gemini/gemini-3.5-flash",
     "anthropic": "anthropic/claude-sonnet-4-6",
     "openai":    "openai/gpt-4o-mini",
 }
@@ -174,7 +174,7 @@ from google import genai as _genai
 
 class _NativeGeminiMessages:
     def __init__(self, model, api_key):
-        self._model  = model  # bare name, e.g. "gemini-1.5-flash"
+        self._model  = model  # bare name, e.g. "gemini-3.5-flash"
         self._client = _genai.Client(api_key=api_key)
 
     @staticmethod
@@ -233,7 +233,7 @@ def _gemini_client_from_pool(pool, identity_id):
     if not pool or not identity_id:
         return None
     idx = hash(str(identity_id)) % len(pool)
-    return _NativeGeminiClient("gemini-1.5-flash", pool[idx])
+    return _NativeGeminiClient("gemini-3.5-flash", pool[idx])
 
 def _get_client_and_model_for_identity():
     """Return (client, model) for the current request's identity.
@@ -250,7 +250,7 @@ def _get_client_and_model_for_identity():
             try:
                 raw      = _decrypt_key(enc)
                 provider = (getattr(flask_login.current_user, "api_provider", None) or "anthropic").lower()
-                model    = _PROVIDER_MODEL.get(provider, "gemini/gemini-1.5-flash")
+                model    = _PROVIDER_MODEL.get(provider, "gemini/gemini-3.5-flash")
                 print(f"[client] branch=own-key provider={provider} model={model}", flush=True)
                 return _LiteLLMClient(model, raw), model
             except Exception as e:
@@ -262,7 +262,7 @@ def _get_client_and_model_for_identity():
     pool_client = _gemini_client_from_pool(_GEMINI_CHAT_POOL, identity_id)
     if pool_client:
         print(f"[client] branch=gemini-native-pool identity={identity_id} pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
-        return pool_client, "gemini-1.5-flash"
+        return pool_client, "gemini-3.5-flash"
 
     print(f"[client] branch=anthropic-fallback pool_empty={not _GEMINI_CHAT_POOL} identity={identity_id}", flush=True)
     return _anthropic_client, "claude-sonnet-4-6"
