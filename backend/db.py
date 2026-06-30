@@ -274,6 +274,11 @@ _SETTINGS_COLS = [
     "default_status_filter", "panel_open_by_default",
 ]
 
+_SETTINGS_BOOL_COLS = {
+    "auto_rename_images", "auto_compress_without_asking", "show_token_counts",
+    "auto_title_chats", "show_typing_animation", "send_on_enter", "panel_open_by_default",
+}
+
 def get_settings(user_id):
     with get_db() as db:
         row = db.execute("SELECT * FROM settings WHERE user_id=?", (user_id,)).fetchone()
@@ -287,7 +292,8 @@ def get_settings(user_id):
         return d
 
 def upsert_settings(user_id, patch):
-    valid = {k: v for k, v in patch.items() if k in _SETTINGS_COLS}
+    valid = {k: (bool(v) if k in _SETTINGS_BOOL_COLS else v)
+             for k, v in patch.items() if k in _SETTINGS_COLS}
     if not valid:
         return
     with get_db() as db:
@@ -514,7 +520,7 @@ def upsert_block(chat_id, block_id, meta):
                 meta.get("type"), meta.get("path"),
                 meta.get("image_tokens", 0), meta.get("code_tokens", 0),
                 meta.get("text_tokens", 0), meta.get("pdf_tokens", 0),
-                meta.get("summary_tokens", 0), int(meta.get("compressed", False)),
+                meta.get("summary_tokens", 0), bool(meta.get("compressed", False)),
                 meta.get("summary"), meta.get("message_index"),
                 meta.get("uploaded_at"), meta.get("base_code"), diffs_json,
                 chat_id, block_id
@@ -531,7 +537,7 @@ def upsert_block(chat_id, block_id, meta):
                 meta.get("type"), meta.get("path"),
                 meta.get("image_tokens", 0), meta.get("code_tokens", 0),
                 meta.get("text_tokens", 0), meta.get("pdf_tokens", 0),
-                meta.get("summary_tokens", 0), int(meta.get("compressed", False)),
+                meta.get("summary_tokens", 0), bool(meta.get("compressed", False)),
                 meta.get("summary"), meta.get("message_index"),
                 meta.get("uploaded_at"), meta.get("base_code"), diffs_json
             ))

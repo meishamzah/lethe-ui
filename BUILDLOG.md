@@ -2,6 +2,69 @@
 
 ---
 
+## Session: 2026-06-30 (part 4) — Fix PostgreSQL boolean type mismatch in upsert_block / upsert_settings
+
+### Root cause
+SQLite silently accepts `0`/`1` for boolean columns; PostgreSQL requires actual
+Python `bool` (`True`/`False`) and raises `DatatypeMismatch` otherwise. `upsert_block`
+was passing `int(meta.get("compressed", False))` — explicit integer coercion — into
+the `compressed BOOLEAN` column. This is a leftover from the SQLite → PostgreSQL
+migration and surfaced as a 500 error on any block upload (PDF, image, code file).
+
+### Fix — `backend/db.py`
+- Replaced `int(meta.get("compressed", False))` with `bool(...)` in **both** the
+  UPDATE and INSERT branches of `upsert_block` (lines 520 and 537).
+- Added `_SETTINGS_BOOL_COLS` set listing all seven boolean columns in the
+  `settings` table.
+- Updated `upsert_settings` to cast any value for a boolean column through `bool()`
+  before it reaches the query, preventing the same class of bug if the frontend
+  ever sends `1`/`0` instead of `true`/`false`.
+
+### What was NOT changed
+`get_settings` and `reconstruct_session` already called `bool()` when reading rows
+back out of the database — the bug was only on the write path.
+
+### Decision
+Fixed proactively across both `blocks` and `settings` rather than only patching the
+observed crash site, since `settings` has seven boolean columns and carries the same
+latent risk.
+
+### Current state
+Block uploads (PDF, image, code) no longer 500 on PostgreSQL. Settings writes are
+also hardened. No schema changes required — the column type was correct; only the
+Python-side value was wrong.
+
+---
+
+## Session: 2026-06-30 (part 3) — Fix identity_id guard + context health bar model limit
+
+### What was implemented
+
+**Fix: Gemini pool always falling back to Anthropic for guests (`backend/app.py`)**
+- Root cause: `lethe_guest_id` cookie is set on the frontend domain via
+  `document.cookie`; cross-origin requests to Railway never include it →
+  `request.cookies.get("lethe_guest_id")` always returns `None` in production.
+- Old guard `if not pool or not identity_id: return None` bailed immediately for
+  every guest, causing Anthropic fallback 100% of the time.
+- Fix: removed `not identity_id` from the guard; use `"anon"` as stable fallback
+  in the hash: `idx = hash(str(identity_id or "anon")) % len(pool)`. All guests
+  without a cookie hash to the same slot — acceptable for single-key pools.
+
+**Context health bar model-aware limit (`frontend/src/App.jsx` + `backend/app.py`)**
+- Added `_MODEL_CONTEXT_LIMITS` dict in `app.py` mapping model strings to
+  context window sizes (Gemini Flash 1M, Claude Sonnet 200k, GPT-4o-mini 128k).
+- Added `/model_info` GET endpoint that calls `_get_client_and_model_for_identity()`
+  and returns `{"model": ..., "context_limit": ...}`.
+- Added `contextLimit` state (default 200000) in `App.jsx`, fetched from
+  `/model_info` on mount alongside `/auth/me`.
+- Replaced hardcoded `const CONTEXT_LIMIT = 200000` with `const CONTEXT_LIMIT = contextLimit`.
+
+### Current state
+Guests and users on the Gemini pool see a 1M-token health bar; Claude/GPT-4o-mini
+users see the correct limit for their model.
+
+---
+
 ## Session: 2026-06-30 (part 2) — Revert native SDK; migrate to gemini-3.5-flash via LiteLLM
 
 ### Root cause (confirmed)
