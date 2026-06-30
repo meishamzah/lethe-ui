@@ -82,6 +82,14 @@ def _parse_key_pool(pool_var, single_fallback_var=None):
 _GEMINI_CHAT_POOL    = _parse_key_pool("GEMINI_CHAT_KEY_POOL",    "GEMINI_API_KEY")
 _GEMINI_BACKEND_POOL = _parse_key_pool("GEMINI_BACKEND_KEY_POOL", "GEMINI_API_KEY")
 
+# Runs at import time (gunicorn + python both) — confirms what was actually read
+def _k(var):
+    v = os.getenv(var, "")
+    return f"set({v[:6]}...)" if v else "NOT SET"
+print(f"[init] GEMINI_API_KEY={_k('GEMINI_API_KEY')} "
+      f"GEMINI_CHAT_KEY_POOL={_k('GEMINI_CHAT_KEY_POOL')} "
+      f"chat_pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
+
 # Per-provider model IDs used with LiteLLM
 _PROVIDER_MODEL = {
     "gemini":    "gemini/gemini-1.5-flash",
