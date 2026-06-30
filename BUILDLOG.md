@@ -2,6 +2,39 @@
 
 ---
 
+## Session: 2026-06-30 (part 2) — Revert native SDK; migrate to gemini-3.5-flash via LiteLLM
+
+### Root cause (confirmed)
+`gemini-1.5-flash` is fully deprecated and no longer listed in available models
+for this key. Every call was failing at model resolution, being silently caught,
+and substituting Anthropic — looked like a transport/key-format issue but wasn't.
+The `AQ.*` transport hypothesis was incorrect; LiteLLM's `gemini/` provider route
+works fine with these keys when the model name is valid.
+
+### Fix
+**`backend/app.py`**
+- Removed `_NativeGeminiMessages`, `_NativeGeminiClient`, and `from google import genai` import.
+- Restored `_gemini_client_from_pool` to use `_LiteLLMClient("gemini/gemini-3.5-flash", key)`.
+- Updated pool branch of `_get_client_and_model_for_identity()` to return
+  `"gemini/gemini-3.5-flash"` as the model string (matching the `gemini/` LiteLLM prefix).
+- Log label changed from `gemini-native-pool` to `gemini-pool`.
+
+**`backend/requirements.txt`**
+- Removed `google-genai` (native SDK no longer needed; LiteLLM handles Gemini via
+  `google-generativeai` which remains in requirements).
+
+### What was tested
+- Confirmed `gemini-3.5-flash` is available on the pool key via `models.list`.
+- Confirmed `gemini-1.5-flash` is absent from available models — that was the root cause.
+- No stale `gemini-1.5-flash` references in production code (BUILDLOG.md only).
+
+### Current state
+Gemini pool path routes through LiteLLM with `gemini/gemini-3.5-flash`. Debug
+logging (`[litellm]`, `[client]`) remains in place until routing is confirmed
+working in Railway logs.
+
+---
+
 ## Session: 2026-06-30 — Switch Gemini pool path to native google-genai SDK
 
 ### Root cause

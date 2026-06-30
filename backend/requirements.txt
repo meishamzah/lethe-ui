@@ -10,5 +10,4 @@ requests
 pymupdf
 psycopg2-binary
 litellm
-google-genai
 google-generativeai
