@@ -663,8 +663,8 @@ export default function App() {
                     <div style={styles.planBadge}>{authUser.plan === "pro" ? "Pro" : "Free"}</div>
                     <button
                       style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 10, padding: 0 }}
-                      onClick={() => {
-                        apiFetch("/auth/logout", { method: "POST" }).catch(() => {})
+                      onClick={async () => {
+                        try { await apiFetch("/auth/logout", { method: "POST" }) } catch (e) {}
                         localStorage.clear()
                         document.cookie = "lethe_guest_id=; path=/; max-age=0; SameSite=Lax"
                         window.location.href = "/?logged_out=1"

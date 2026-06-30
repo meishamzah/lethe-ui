@@ -157,13 +157,21 @@ def verify():
 def logout():
     user_id = flask_login.current_user.id if flask_login.current_user.is_authenticated else None
     flask_login.logout_user()
-    # Do NOT call session.clear() here — it wipes flask_login's _remember="clear"
-    # signal before its after_request hook can delete the remember_token cookie.
+    # Do NOT call session.clear() — it wipes flask_login's _remember="clear" signal
+    # before its after_request hook can delete the remember_token cookie.
+    # Safe to pop individual keys, just not to clear() the whole session.
+    session.pop("active_chat_id", None)
     if user_id:
         database.log_event("logout", user_id=user_id)
     resp = jsonify({"ok": True})
     cookie_name = current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token")
-    resp.delete_cookie(cookie_name, path="/")
+    production = bool(os.getenv("RAILWAY_ENVIRONMENT"))
+    resp.delete_cookie(
+        cookie_name,
+        path="/",
+        samesite="None" if production else "Lax",
+        secure=production,
+    )
     return resp
 
 @auth_bp.route("/me")
