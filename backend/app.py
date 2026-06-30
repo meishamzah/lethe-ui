@@ -166,9 +166,9 @@ class _LiteLLMClient:
 
 def _gemini_client_from_pool(pool, identity_id):
     """Pick a Gemini key from pool deterministically by identity, return adapter or None."""
-    if not pool or not identity_id:
+    if not pool:
         return None
-    idx = hash(str(identity_id)) % len(pool)
+    idx = hash(str(identity_id or "anon")) % len(pool)
     return _LiteLLMClient("gemini/gemini-3.5-flash", pool[idx])
 
 def _get_client_and_model_for_identity():
@@ -195,12 +195,13 @@ def _get_client_and_model_for_identity():
     else:
         identity_id = request.cookies.get("lethe_guest_id")
 
+    print(f"[client] identity_id={identity_id!r} authenticated={flask_login.current_user.is_authenticated}", flush=True)
     pool_client = _gemini_client_from_pool(_GEMINI_CHAT_POOL, identity_id)
     if pool_client:
-        print(f"[client] branch=gemini-pool identity={identity_id} pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
+        print(f"[client] branch=gemini-pool identity={identity_id!r} pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
         return pool_client, "gemini/gemini-3.5-flash"
 
-    print(f"[client] branch=anthropic-fallback pool_empty={not _GEMINI_CHAT_POOL} identity={identity_id}", flush=True)
+    print(f"[client] branch=anthropic-fallback pool_empty={not _GEMINI_CHAT_POOL} identity={identity_id!r}", flush=True)
     return _anthropic_client, "claude-sonnet-4-6"
 
 # ── Encryption ──────────────────────────────────────────────────────────────────
