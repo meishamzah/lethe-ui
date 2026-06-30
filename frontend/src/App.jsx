@@ -191,6 +191,11 @@ export default function App() {
   const [switchingChat, setSwitchingChat] = useState(false)
 
   const { setIsTransitioning } = useContext(TransitionContext)
+  const loadingStartRef = useRef(Date.now())
+  const doneLoading = () => {
+    const elapsed = Date.now() - loadingStartRef.current
+    setTimeout(() => setIsTransitioning(false), Math.max(0, 2000 - elapsed))
+  }
 
   // ── Persistence: load chats on mount ──────────────────────────────────────
 
@@ -246,14 +251,14 @@ export default function App() {
         setChats([{ id: ncData.chat_id, title: "New Chat" }])
         setActiveChatId(ncData.chat_id)
       }
-      setIsTransitioning(false)
+      doneLoading()
     } catch (e) {
       console.error("Failed to fetch chats:", e.message)
       if (retries > 0) {
         setTimeout(() => fetchChats(retries - 1), 1500)
       } else {
         setChatsLoading(false)
-        setIsTransitioning(false)
+        doneLoading()
       }
     }
   }

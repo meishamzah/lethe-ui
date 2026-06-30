@@ -65,10 +65,16 @@ export default function LandingPage() {
   const { setIsTransitioning } = useContext(TransitionContext)
 
   useEffect(() => {
+    const startedAt = Date.now()
+    const done = () => {
+      const elapsed = Date.now() - startedAt
+      setTimeout(() => setIsTransitioning(false), Math.max(0, 2000 - elapsed))
+    }
+
     const params = new URLSearchParams(window.location.search)
     if (params.get("logged_out") === "1") {
       window.history.replaceState({}, "", "/")
-      setIsTransitioning(false)
+      done()
       return
     }
     fetch(`${API}/auth/me`, { credentials: "include" })
@@ -78,10 +84,10 @@ export default function LandingPage() {
           setIsTransitioning(true)
           navigate("/chat", { replace: true })
         } else {
-          setIsTransitioning(false)
+          done()
         }
       })
-      .catch(() => { setIsTransitioning(false) })
+      .catch(() => { done() })
   }, [navigate])
 
   const startFree = () => {
