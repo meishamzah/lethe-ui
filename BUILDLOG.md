@@ -260,3 +260,42 @@ Replaced the Phase 1 `_compress_pdf` stub with the full multimodal algorithm des
 - Chat interface at `/chat`
 - OAuth redirect goes to `/chat` after login
 - Sign-out returns to `/`
+
+---
+
+## Session: 2026-06-29 — PostgreSQL migration + sign-out fixes
+
+### What was implemented
+
+#### Sign-out bug fixes (`frontend/src/App.jsx`, `frontend/src/LandingPage.jsx`, `backend/auth.py`)
+- **Root cause 1**: `session.clear()` in `logout()` was wiping Flask-Login's `session["_remember"] = "clear"` signal before its `after_request` hook could run, so `remember_token` cookie was never deleted. Backend re-authenticated the user from the still-valid cookie on the next request.
+- **Fix**: Removed `session.clear()` from `logout()`. Added explicit `resp.delete_cookie(cookie_name, path="/")` as belt-and-suspenders.
+- **Root cause 2**: `await apiFetch("/auth/logout")` could block indefinitely if the backend was slow, preventing `window.location.href = "/"` from executing.
+- **Fix**: Made sign-out handler synchronous (fire-and-forget logout), redirect to `/?logged_out=1`.
+- **Root cause 3**: LandingPage's `/auth/me` check could redirect back to `/chat` before the session was cleared.
+- **Fix**: LandingPage skips the auth redirect when `?logged_out=1` is present, then cleans the URL with `window.history.replaceState`.
+
+#### PostgreSQL migration (`backend/db.py`)
+- Introduced `_DB` wrapper class unifying sqlite3 and psycopg2 under one interface
+- `_DB.execute()`: replaces `?` → `%s` for psycopg2, uses `RealDictCursor` so rows are dict-accessible in both engines
+- `_DB.execute_returning_id()`: uses `RETURNING id` + `fetchone()["id"]` for psycopg2; `cursor.lastrowid` for sqlite3
+- `_DB.__exit__()`: commits on success, rolls back on exception, closes connection — eliminating all scattered `conn.commit()` calls
+- Separate DDL: `_SQLITE_DDL` (AUTOINCREMENT, BOOLEAN DEFAULT 0/1, REAL) and `_PG_TABLES` (SERIAL PRIMARY KEY, BOOLEAN DEFAULT TRUE/FALSE, DOUBLE PRECISION)
+- `init_db()` delegates to the right DDL path; migration column check uses `information_schema.columns` for PG, `PRAGMA table_info` for SQLite
+- `DATABASE_URL` env var selects psycopg2; absent → SQLite (local dev unchanged)
+- `psycopg2-binary` added to `requirements.txt`
+
+### Tested
+- `python -c "import db; db.init_db()"` → OK (SQLite path)
+- Backend import check → OK
+
+### Issues / decisions
+- Did not use `session.clear()` after `logout_user()` — Flask-Login stores its `_remember="clear"` signal in the session; clearing the session before `after_request` runs prevents the remember cookie from being deleted.
+- `cursor.lastrowid` is unreliable with psycopg2 on tables without OIDs (default since PG12); `RETURNING id` is used instead.
+- `executescript()` is sqlite3-only; PG init runs each CREATE TABLE statement individually.
+- `int(meta.get("compressed", False))` kept as-is — psycopg2 coerces integers to BOOLEAN columns without issues.
+
+### Current state
+- SQLite used locally (DATABASE_URL not set)
+- PostgreSQL used on Railway (DATABASE_URL set)
+- All CRUD functions work identically through the `_DB` wrapper

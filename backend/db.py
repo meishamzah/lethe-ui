@@ -4,130 +4,266 @@ import os
 import base64
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "lethe.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+_USE_PG = bool(DATABASE_URL)
+
+if _USE_PG:
+    import psycopg2
+    import psycopg2.extras
+
+
+class _DB:
+    """Unified connection wrapper for sqlite3 (local dev) and psycopg2 (production)."""
+
+    def __init__(self):
+        if _USE_PG:
+            self._conn = psycopg2.connect(DATABASE_URL)
+            self._is_pg = True
+        else:
+            self._conn = sqlite3.connect(DB_PATH)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA foreign_keys = ON")
+            self._is_pg = False
+
+    def execute(self, sql, params=()):
+        if self._is_pg:
+            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql.replace("?", "%s"), params)
+            return cur
+        return self._conn.execute(sql, params)
+
+    def execute_returning_id(self, sql, params=()):
+        """Execute an INSERT and return the generated primary key."""
+        if self._is_pg:
+            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql.replace("?", "%s") + " RETURNING id", params)
+            return cur.fetchone()["id"]
+        cur = self._conn.execute(sql, params)
+        return cur.lastrowid
+
+    def commit(self):
+        self._conn.commit()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            self._conn.rollback()
+        else:
+            self._conn.commit()
+        self._conn.close()
+        return False
+
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return _DB()
+
+
+# ── Schema ─────────────────────────────────────────────────────────────────────
+
+_SQLITE_DDL = """
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  google_id TEXT UNIQUE NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  display_name TEXT,
+  avatar_url TEXT,
+  plan TEXT DEFAULT 'free',
+  api_key_encrypted TEXT,
+  api_provider TEXT DEFAULT 'anthropic',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id),
+  auto_rename_images BOOLEAN DEFAULT 1,
+  auto_compress_without_asking BOOLEAN DEFAULT 0,
+  auto_compress_threshold INTEGER DEFAULT 80,
+  compression_min_tokens INTEGER DEFAULT 500,
+  show_token_counts BOOLEAN DEFAULT 1,
+  auto_title_chats BOOLEAN DEFAULT 1,
+  show_typing_animation BOOLEAN DEFAULT 1,
+  send_on_enter BOOLEAN DEFAULT 1,
+  default_view_mode TEXT DEFAULT 'detailed',
+  default_status_filter TEXT DEFAULT 'all',
+  panel_open_by_default BOOLEAN DEFAULT 1,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  guest_id TEXT,
+  title TEXT DEFAULT 'New chat',
+  history_json TEXT DEFAULT '[]',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  image_url TEXT,
+  metadata TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+  block_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  path TEXT,
+  image_tokens INTEGER DEFAULT 0,
+  code_tokens INTEGER DEFAULT 0,
+  text_tokens INTEGER DEFAULT 0,
+  pdf_tokens INTEGER DEFAULT 0,
+  summary_tokens INTEGER DEFAULT 0,
+  compressed BOOLEAN DEFAULT FALSE,
+  summary TEXT,
+  message_index INTEGER,
+  uploaded_at REAL,
+  base_code TEXT,
+  diffs TEXT,
+  UNIQUE(chat_id, block_id)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT,
+  guest_id TEXT,
+  user_id INTEGER,
+  metadata TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+_PG_TABLES = [
+    """CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      google_id TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      display_name TEXT,
+      avatar_url TEXT,
+      plan TEXT DEFAULT 'free',
+      api_key_encrypted TEXT,
+      api_provider TEXT DEFAULT 'anthropic',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS settings (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id),
+      auto_rename_images BOOLEAN DEFAULT TRUE,
+      auto_compress_without_asking BOOLEAN DEFAULT FALSE,
+      auto_compress_threshold INTEGER DEFAULT 80,
+      compression_min_tokens INTEGER DEFAULT 500,
+      show_token_counts BOOLEAN DEFAULT TRUE,
+      auto_title_chats BOOLEAN DEFAULT TRUE,
+      show_typing_animation BOOLEAN DEFAULT TRUE,
+      send_on_enter BOOLEAN DEFAULT TRUE,
+      default_view_mode TEXT DEFAULT 'detailed',
+      default_status_filter TEXT DEFAULT 'all',
+      panel_open_by_default BOOLEAN DEFAULT TRUE,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS chats (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      guest_id TEXT,
+      title TEXT DEFAULT 'New chat',
+      history_json TEXT DEFAULT '[]',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS messages (
+      id SERIAL PRIMARY KEY,
+      chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      image_url TEXT,
+      metadata TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS blocks (
+      id SERIAL PRIMARY KEY,
+      chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+      block_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      path TEXT,
+      image_tokens INTEGER DEFAULT 0,
+      code_tokens INTEGER DEFAULT 0,
+      text_tokens INTEGER DEFAULT 0,
+      pdf_tokens INTEGER DEFAULT 0,
+      summary_tokens INTEGER DEFAULT 0,
+      compressed BOOLEAN DEFAULT FALSE,
+      summary TEXT,
+      message_index INTEGER,
+      uploaded_at DOUBLE PRECISION,
+      base_code TEXT,
+      diffs TEXT,
+      UNIQUE(chat_id, block_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS events (
+      id SERIAL PRIMARY KEY,
+      event_type TEXT,
+      guest_id TEXT,
+      user_id INTEGER,
+      metadata TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+]
+
 
 def init_db():
-    with get_db() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          google_id TEXT UNIQUE NOT NULL,
-          email TEXT UNIQUE NOT NULL,
-          display_name TEXT,
-          avatar_url TEXT,
-          plan TEXT DEFAULT 'free',
-          api_key_encrypted TEXT,
-          api_provider TEXT DEFAULT 'anthropic',
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+    with get_db() as db:
+        if db._is_pg:
+            for stmt in _PG_TABLES:
+                db.execute(stmt)
+            cur = db.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='chats' AND table_schema='public'"
+            )
+            cols = [r["column_name"] for r in cur.fetchall()]
+            if "user_id" not in cols:
+                db.execute("ALTER TABLE chats ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+            if "guest_id" not in cols:
+                db.execute("ALTER TABLE chats ADD COLUMN guest_id TEXT")
+        else:
+            db._conn.executescript(_SQLITE_DDL)
+            cols = [r[1] for r in db._conn.execute("PRAGMA table_info(chats)").fetchall()]
+            if "user_id" not in cols:
+                db._conn.execute("ALTER TABLE chats ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+            if "guest_id" not in cols:
+                db._conn.execute("ALTER TABLE chats ADD COLUMN guest_id TEXT")
 
-        CREATE TABLE IF NOT EXISTS settings (
-          user_id INTEGER PRIMARY KEY REFERENCES users(id),
-          auto_rename_images BOOLEAN DEFAULT 1,
-          auto_compress_without_asking BOOLEAN DEFAULT 0,
-          auto_compress_threshold INTEGER DEFAULT 80,
-          compression_min_tokens INTEGER DEFAULT 500,
-          show_token_counts BOOLEAN DEFAULT 1,
-          auto_title_chats BOOLEAN DEFAULT 1,
-          show_typing_animation BOOLEAN DEFAULT 1,
-          send_on_enter BOOLEAN DEFAULT 1,
-          default_view_mode TEXT DEFAULT 'detailed',
-          default_status_filter TEXT DEFAULT 'all',
-          panel_open_by_default BOOLEAN DEFAULT 1,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS chats (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-          guest_id TEXT,
-          title TEXT DEFAULT 'New chat',
-          history_json TEXT DEFAULT '[]',
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS messages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
-          role TEXT NOT NULL,
-          content TEXT NOT NULL,
-          image_url TEXT,
-          metadata TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS blocks (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
-          block_id TEXT NOT NULL,
-          type TEXT NOT NULL,
-          path TEXT,
-          image_tokens INTEGER DEFAULT 0,
-          code_tokens INTEGER DEFAULT 0,
-          text_tokens INTEGER DEFAULT 0,
-          pdf_tokens INTEGER DEFAULT 0,
-          summary_tokens INTEGER DEFAULT 0,
-          compressed BOOLEAN DEFAULT FALSE,
-          summary TEXT,
-          message_index INTEGER,
-          uploaded_at REAL,
-          base_code TEXT,
-          diffs TEXT,
-          UNIQUE(chat_id, block_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS events (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          event_type TEXT,
-          guest_id TEXT,
-          user_id INTEGER,
-          metadata TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-
-        # Migrate existing chats table if user_id/guest_id columns are missing
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(chats)").fetchall()]
-        if "user_id" not in cols:
-            conn.execute("ALTER TABLE chats ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
-        if "guest_id" not in cols:
-            conn.execute("ALTER TABLE chats ADD COLUMN guest_id TEXT")
-
-        conn.commit()
 
 # ── Users ──────────────────────────────────────────────────────────────────────
 
 def create_user(google_id, email, display_name=None, avatar_url=None):
-    with get_db() as conn:
-        cursor = conn.execute(
+    with get_db() as db:
+        return db.execute_returning_id(
             "INSERT INTO users (google_id, email, display_name, avatar_url) VALUES (?,?,?,?)",
             (google_id, email, display_name, avatar_url))
-        conn.commit()
-        return cursor.lastrowid
 
 def get_user_by_google_id(google_id):
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM users WHERE google_id=?", (google_id,)).fetchone()
+    with get_db() as db:
+        row = db.execute("SELECT * FROM users WHERE google_id=?", (google_id,)).fetchone()
         return dict(row) if row else None
 
 def get_user_by_id(user_id):
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    with get_db() as db:
+        row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         return dict(row) if row else None
 
 def update_user(user_id, **fields):
     if not fields:
         return
     cols = ", ".join(f"{k}=?" for k in fields)
-    with get_db() as conn:
-        conn.execute(f"UPDATE users SET {cols} WHERE id=?", (*fields.values(), user_id))
-        conn.commit()
+    with get_db() as db:
+        db.execute(f"UPDATE users SET {cols} WHERE id=?", (*fields.values(), user_id))
+
 
 # ── Settings ───────────────────────────────────────────────────────────────────
 
@@ -139,14 +275,13 @@ _SETTINGS_COLS = [
 ]
 
 def get_settings(user_id):
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM settings WHERE user_id=?", (user_id,)).fetchone()
+    with get_db() as db:
+        row = db.execute("SELECT * FROM settings WHERE user_id=?", (user_id,)).fetchone()
         if not row:
             return None
         d = dict(row)
-        # Cast booleans
-        for k in ["auto_rename_images","auto_compress_without_asking","show_token_counts",
-                   "auto_title_chats","show_typing_animation","send_on_enter","panel_open_by_default"]:
+        for k in ["auto_rename_images", "auto_compress_without_asking", "show_token_counts",
+                   "auto_title_chats", "show_typing_animation", "send_on_enter", "panel_open_by_default"]:
             if k in d:
                 d[k] = bool(d[k])
         return d
@@ -155,95 +290,89 @@ def upsert_settings(user_id, patch):
     valid = {k: v for k, v in patch.items() if k in _SETTINGS_COLS}
     if not valid:
         return
-    with get_db() as conn:
-        existing = conn.execute("SELECT 1 FROM settings WHERE user_id=?", (user_id,)).fetchone()
+    with get_db() as db:
+        existing = db.execute("SELECT 1 FROM settings WHERE user_id=?", (user_id,)).fetchone()
         if existing:
             cols = ", ".join(f"{k}=?" for k in valid)
-            conn.execute(
+            db.execute(
                 f"UPDATE settings SET {cols}, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
                 (*valid.values(), user_id))
         else:
             cols = ", ".join(valid.keys())
             placeholders = ", ".join("?" * (len(valid) + 1))
-            conn.execute(
+            db.execute(
                 f"INSERT INTO settings (user_id, {cols}) VALUES ({placeholders})",
                 (user_id, *valid.values()))
-        conn.commit()
+
 
 # ── Chats ──────────────────────────────────────────────────────────────────────
 
 def create_chat(title="New chat", user_id=None, guest_id=None):
-    with get_db() as conn:
-        cursor = conn.execute(
+    with get_db() as db:
+        return db.execute_returning_id(
             "INSERT INTO chats (title, user_id, guest_id) VALUES (?,?,?)",
             (title, user_id, guest_id))
-        conn.commit()
-        return cursor.lastrowid
 
 def get_chats_for_user(user_id):
-    with get_db() as conn:
-        rows = conn.execute(
+    with get_db() as db:
+        rows = db.execute(
             "SELECT id, title, created_at, updated_at FROM chats "
             "WHERE user_id=? ORDER BY updated_at DESC", (user_id,)).fetchall()
         return [dict(r) for r in rows]
 
 def get_chats_for_guest(guest_id):
-    with get_db() as conn:
-        rows = conn.execute(
+    with get_db() as db:
+        rows = db.execute(
             "SELECT id, title, created_at, updated_at FROM chats "
             "WHERE guest_id=? ORDER BY updated_at DESC", (guest_id,)).fetchall()
         return [dict(r) for r in rows]
 
 def migrate_guest_chats(guest_id, user_id):
     """Reassign all guest chats to a real user on login."""
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "UPDATE chats SET user_id=?, guest_id=NULL WHERE guest_id=?",
             (user_id, guest_id))
-        conn.commit()
 
 def get_chat(chat_id):
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
+    with get_db() as db:
+        row = db.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
         return dict(row) if row else None
 
 def update_chat_title(chat_id, title):
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "UPDATE chats SET title=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (title, chat_id))
-        conn.commit()
 
 def delete_chat(chat_id):
-    with get_db() as conn:
-        conn.execute("DELETE FROM chats WHERE id=?", (chat_id,))
-        conn.commit()
+    with get_db() as db:
+        db.execute("DELETE FROM chats WHERE id=?", (chat_id,))
 
 def touch_chat(chat_id):
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "UPDATE chats SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (chat_id,))
-        conn.commit()
+
 
 # ── Events ─────────────────────────────────────────────────────────────────────
 
 def log_event(event_type, guest_id=None, user_id=None, metadata=None):
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "INSERT INTO events (event_type, guest_id, user_id, metadata) VALUES (?,?,?,?)",
             (event_type, guest_id, user_id,
              json.dumps(metadata) if metadata else None))
-        conn.commit()
+
 
 # ── History ────────────────────────────────────────────────────────────────────
 
 def save_history(chat_id, history, blocks):
     serialized = _serialize_history(history, blocks)
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "UPDATE chats SET history_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (serialized, chat_id))
-        conn.commit()
 
 def load_history(chat_id):
     chat = get_chat(chat_id)
@@ -328,28 +457,27 @@ def _deserialize_history(history_json):
             result.append({"role": msg["role"], "content": parts})
     return result
 
+
 # ── Messages ───────────────────────────────────────────────────────────────────
 
 def delete_last_display_message(chat_id, role):
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "DELETE FROM messages WHERE id = ("
             "  SELECT MAX(id) FROM messages WHERE chat_id=? AND role=?"
             ")", (chat_id, role))
-        conn.commit()
 
 def save_display_message(chat_id, role, content, image_url=None, metadata=None):
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "INSERT INTO messages (chat_id, role, content, image_url, metadata) VALUES (?,?,?,?,?)",
             (chat_id, role, content,
              image_url,
              json.dumps(metadata) if metadata else None))
-        conn.commit()
 
 def get_display_messages(chat_id):
-    with get_db() as conn:
-        rows = conn.execute(
+    with get_db() as db:
+        rows = db.execute(
             "SELECT role, content, image_url, metadata FROM messages "
             "WHERE chat_id=? ORDER BY created_at",
             (chat_id,)).fetchall()
@@ -366,16 +494,17 @@ def get_display_messages(chat_id):
         result.append(msg)
     return result
 
+
 # ── Blocks ─────────────────────────────────────────────────────────────────────
 
 def upsert_block(chat_id, block_id, meta):
     diffs_json = json.dumps(meta.get("diffs", []))
-    with get_db() as conn:
-        existing = conn.execute(
+    with get_db() as db:
+        existing = db.execute(
             "SELECT id FROM blocks WHERE chat_id=? AND block_id=?",
             (chat_id, block_id)).fetchone()
         if existing:
-            conn.execute("""
+            db.execute("""
                 UPDATE blocks SET type=?, path=?,
                     image_tokens=?, code_tokens=?, text_tokens=?, pdf_tokens=?,
                     summary_tokens=?, compressed=?, summary=?,
@@ -391,7 +520,7 @@ def upsert_block(chat_id, block_id, meta):
                 chat_id, block_id
             ))
         else:
-            conn.execute("""
+            db.execute("""
                 INSERT INTO blocks (chat_id, block_id, type, path,
                     image_tokens, code_tokens, text_tokens, pdf_tokens,
                     summary_tokens, compressed, summary,
@@ -406,20 +535,19 @@ def upsert_block(chat_id, block_id, meta):
                 meta.get("summary"), meta.get("message_index"),
                 meta.get("uploaded_at"), meta.get("base_code"), diffs_json
             ))
-        conn.commit()
 
 def rename_block(chat_id, old_id, new_id):
-    with get_db() as conn:
-        conn.execute(
+    with get_db() as db:
+        db.execute(
             "UPDATE blocks SET block_id=? WHERE chat_id=? AND block_id=?",
             (new_id, chat_id, old_id))
-        conn.commit()
 
 def get_blocks_for_chat(chat_id):
-    with get_db() as conn:
-        rows = conn.execute(
+    with get_db() as db:
+        rows = db.execute(
             "SELECT * FROM blocks WHERE chat_id=?", (chat_id,)).fetchall()
         return [dict(r) for r in rows]
+
 
 # ── Session reconstruction ─────────────────────────────────────────────────────
 
