@@ -68,9 +68,19 @@ app.register_blueprint(auth_bp)
 # Anthropic client — used exclusively for compress() calls
 _anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# Gemini key pools for chat and backend operations
-_GEMINI_CHAT_POOL    = [k.strip() for k in os.getenv("GEMINI_CHAT_KEY_POOL",    "").split(",") if k.strip()]
-_GEMINI_BACKEND_POOL = [k.strip() for k in os.getenv("GEMINI_BACKEND_KEY_POOL", "").split(",") if k.strip()]
+# Gemini key pools for chat and backend operations.
+# GEMINI_CHAT_KEY_POOL / GEMINI_BACKEND_KEY_POOL accept comma-separated lists.
+# If those aren't set, fall back to the single-key GEMINI_API_KEY env var.
+def _parse_key_pool(pool_var, single_fallback_var=None):
+    keys = [k.strip() for k in os.getenv(pool_var, "").split(",") if k.strip()]
+    if not keys and single_fallback_var:
+        fallback = os.getenv(single_fallback_var, "").strip()
+        if fallback:
+            keys = [fallback]
+    return keys
+
+_GEMINI_CHAT_POOL    = _parse_key_pool("GEMINI_CHAT_KEY_POOL",    "GEMINI_API_KEY")
+_GEMINI_BACKEND_POOL = _parse_key_pool("GEMINI_BACKEND_KEY_POOL", "GEMINI_API_KEY")
 
 # Per-provider model IDs used with LiteLLM
 _PROVIDER_MODEL = {
@@ -623,4 +633,6 @@ def history():
     return jsonify({"history": safe_history})
 
 if __name__ == "__main__":
+    print(f"[startup] Gemini chat pool: {len(_GEMINI_CHAT_POOL)} key(s) loaded", flush=True)
+    print(f"[startup] Gemini backend pool: {len(_GEMINI_BACKEND_POOL)} key(s) loaded", flush=True)
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)
