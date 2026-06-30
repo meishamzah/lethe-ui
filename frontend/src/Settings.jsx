@@ -58,7 +58,7 @@ export default function SettingsModal({ settings, onChange, onClose, onClearHist
   const NAVS = [
     { id: "context", label: "Context management" },
     { id: "chat",    label: "Chat behaviour" },
-    { id: "panel",   label: "Right panel" },
+    { id: "panel",   label: "Context panel" },
     { id: "privacy", label: "Privacy" },
   ]
 
@@ -130,9 +130,9 @@ export default function SettingsModal({ settings, onChange, onClose, onClearHist
               </div>
             </>}
 
-            {/* ── Right panel ── */}
+            {/* ── Context panel ── */}
             {section === "panel" && <>
-              <SectionTitle>Right panel</SectionTitle>
+              <SectionTitle>Context panel</SectionTitle>
               <SettingRow label="Default view mode">
                 <div style={{ display: "flex", gap: 6 }}>
                   {["list", "tile", "detailed"].map(m => (

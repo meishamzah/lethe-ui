@@ -73,7 +73,7 @@ export default function LoadingScreen({ show }) {
             "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         }}
       >
-        Lethe
+        
       </span>
     </div>
   )

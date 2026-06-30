@@ -732,6 +732,57 @@ GET  /auth/me               # returns current user info for sidebar
   - Frontend only knows which provider is active, never sees raw key
 - Even if DB is compromised, keys are unreadable without server encryption key
 
+### API key model (updated)
+
+#### No key (default for all users — guests and logged-in)
+- Uses Lethe's Gemini Flash key pool
+- One-time disclaimer shown on first message:
+  "You're chatting on Gemini Flash. Google may use your conversations 
+  to improve their models. Add your own API key in settings to opt out."
+- User dismisses once — stored in localStorage (guest) or DB (logged-in)
+- Disclaimer never shown again after dismissal
+- Rate limited by key pool — one key per 5 users
+- Works identically for guests and logged-in users without a key
+
+#### Own API key (opt-in)
+- User pastes key in settings, selects provider
+- Provider options: Gemini Flash, Claude (Anthropic), GPT (OpenAI), Deepseek
+- Their key, their quota, their privacy
+- Disclaimer removed permanently once own key is saved
+- Key stored encrypted in DB (logged-in users only)
+- Guests cannot store a key — must log in first
+
+#### Compression always uses Anthropic (your key)
+- compress(), semantic scanner, summarizer — always Claude
+- Ephemeral prompt injection — always Claude
+- These are Lethe's internal operations, invisible to user
+- Never use guest's provider for compression — quality must be consistent
+- Cost is minimal — compression happens infrequently
+
+#### Key selection logic in app.py
+```python
+def get_chat_client(identity_type, identity_id, user=None):
+    # logged-in user with own key
+    if user and user.api_key_encrypted:
+        raw_key = _decrypt_key(user.api_key_encrypted)
+        provider = user.api_provider
+        return build_client(provider, raw_key)
+    
+    # guest or logged-in user without key — use pool
+    pool_key = get_chat_key(identity_id)
+    return build_client("gemini", pool_key)
+
+def get_backend_client():
+    # always Anthropic for Lethe operations
+    return anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+```
+
+#### Tier summary (updated)
+- Guest: Gemini Flash pool + disclaimer + message limit
+- Free account: Gemini Flash pool + disclaimer + persistent chats + higher limits
+- Own key account: their provider + no disclaimer + full control
+- The difference between guest and free is persistence, not API access
+
 #### API key endpoints
 ```python
 POST /settings/api_key  # receives raw key, encrypts, stores

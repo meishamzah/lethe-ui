@@ -20,3 +20,9 @@ frontend/.claude/
 
 # General
 .DS_Store
+CLAUDE.md
+MultiModalCompressionAlgorithm.md
+M5-implementation-log.md
+M4-implementation-log.md
+server_err.txt
+server_start.txt
