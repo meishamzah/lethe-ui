@@ -2,6 +2,63 @@
 
 ---
 
+## Session: 2026-06-30 (part 5) — Quick-switch provider + Claude fallback on LLM error
+
+### What was implemented
+
+**Quick switch (`CHAT_PROVIDER` env var) — `backend/app.py`**
+- Added `_CHAT_PROVIDER = int(os.getenv("CHAT_PROVIDER", "0") or "0")` at module level.
+- Added `_PROVIDER_SWITCH` mapping 1-5 to LiteLLM model strings and the API key env
+  var required for each:
+  - 1 = `anthropic/claude-sonnet-4-6` (needs `ANTHROPIC_API_KEY`)
+  - 2 = `gemini/gemini-3.5-flash` (uses existing `GEMINI_CHAT_KEY_POOL`)
+  - 3 = `openai/gpt-4o-mini` (needs `OPENAI_API_KEY`)
+  - 4 = `groq/llama-3.3-70b-versatile` (needs `GROQ_API_KEY`)
+  - 5 = `deepseek/deepseek-chat` (needs `DEEPSEEK_API_KEY`)
+- Updated `_get_client_and_model_for_identity()`: if `CHAT_PROVIDER` is set, it short-
+  circuits at priority 0 (before all user-specific routing, including own API keys).
+  Provider 2 reuses the pool; providers 1/3/4/5 build a `_LiteLLMClient` with the
+  corresponding env key. Falls through to default routing if the required key isn't set.
+- Added `groq/llama-3.3-70b-versatile` and `deepseek/deepseek-chat` to
+  `_MODEL_CONTEXT_LIMITS` (128k each) so `/model_info` returns the correct limit.
+- Startup log now shows `CHAT_PROVIDER=N` or `CHAT_PROVIDER=default`.
+
+**Claude fallback on LLM API error — `backend/app.py`**
+- Added three helpers before the route definitions:
+  - `_snapshot_session(sess, code_id)` — captures history length, block ID set, and
+    code diffs (for existing code blocks that may get a new diff appended) before a
+    `send()` call.
+  - `_restore_session(sess, snapshot, code_id)` — rolls back those three things after
+    a failed `send()`.
+  - `_send_with_fallback(sess, text, **kwargs)` — tries `sess.send()`; on any exception,
+    restores state and retries using `_LiteLLMClient("anthropic/claude-sonnet-4-6", ...)`.
+    Does not fall back if the primary is already Claude/Anthropic. Restores
+    `sess.client` and `sess.model` to originals in a `finally` block (so the next
+    request still uses the primary provider). If the fallback also fails, restores
+    state again and re-raises.
+- Updated `/send` to call `_send_with_fallback` instead of `sess.send()` directly.
+  Wraps the call in `try/except` returning a 502 with a user-friendly error if both
+  primary and fallback fail.
+- Updated `/retry` to call `_send_with_fallback` instead of `sess.send()` directly.
+  The existing outer `try/except` in `/retry` handles both-providers-down.
+
+### Decision log
+- The quick switch overrides users' own API keys — this is intentional (admin-level
+  testing tool). Unset = default per-user routing unchanged.
+- Fallback does NOT permanently change the session client — the primary is retried
+  on every subsequent request. If the primary is consistently down, every request
+  falls back, which is the desired behavior.
+- Code diffs snapshot is necessary because `send()` with a known `code_id` appends
+  to the existing block's `diffs` list before the API call, and would leave a stale
+  diff if the call fails.
+
+### Current state
+Set `CHAT_PROVIDER=4` on Railway to switch all traffic to Groq Llama; unset to go
+back to default Gemini pool routing. Any non-Claude provider that fails will
+automatically retry with Claude Sonnet using `ANTHROPIC_API_KEY`.
+
+---
+
 ## Session: 2026-06-30 (part 4) — Fix PostgreSQL boolean type mismatch in upsert_block / upsert_settings
 
 ### Root cause

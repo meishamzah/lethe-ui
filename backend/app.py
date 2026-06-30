@@ -82,13 +82,29 @@ def _parse_key_pool(pool_var, single_fallback_var=None):
 _GEMINI_CHAT_POOL    = _parse_key_pool("GEMINI_CHAT_KEY_POOL",    "GEMINI_API_KEY")
 _GEMINI_BACKEND_POOL = _parse_key_pool("GEMINI_BACKEND_KEY_POOL", "GEMINI_API_KEY")
 
+# Quick switch: set CHAT_PROVIDER=N to route all chat traffic to one provider.
+#   1 = Claude  (anthropic/claude-sonnet-4-6, needs ANTHROPIC_API_KEY)
+#   2 = Gemini  (gemini/gemini-3.5-flash, uses existing pool)
+#   3 = GPT-4o-mini (openai/gpt-4o-mini, needs OPENAI_API_KEY)
+#   4 = Groq Llama (groq/llama-3.3-70b-versatile, needs GROQ_API_KEY)
+#   5 = DeepSeek (deepseek/deepseek-chat, needs DEEPSEEK_API_KEY)
+# Unset (0) = default per-user routing.
+_CHAT_PROVIDER = int(os.getenv("CHAT_PROVIDER", "0") or "0")
+_PROVIDER_SWITCH = {
+    1: ("anthropic/claude-sonnet-4-6", "ANTHROPIC_API_KEY"),
+    3: ("openai/gpt-4o-mini",           "OPENAI_API_KEY"),
+    4: ("groq/llama-3.3-70b-versatile", "GROQ_API_KEY"),
+    5: ("deepseek/deepseek-chat",        "DEEPSEEK_API_KEY"),
+}
+
 # Runs at import time (gunicorn + python both) — confirms what was actually read
 def _k(var):
     v = os.getenv(var, "")
     return f"set({v[:6]}...)" if v else "NOT SET"
 print(f"[init] GEMINI_API_KEY={_k('GEMINI_API_KEY')} "
       f"GEMINI_CHAT_KEY_POOL={_k('GEMINI_CHAT_KEY_POOL')} "
-      f"chat_pool_size={len(_GEMINI_CHAT_POOL)}", flush=True)
+      f"chat_pool_size={len(_GEMINI_CHAT_POOL)} "
+      f"CHAT_PROVIDER={_CHAT_PROVIDER or 'default'}", flush=True)
 
 # Per-provider model IDs used with LiteLLM
 _PROVIDER_MODEL = {
@@ -99,11 +115,13 @@ _PROVIDER_MODEL = {
 
 # Context window limits per model (tokens)
 _MODEL_CONTEXT_LIMITS = {
-    "gemini/gemini-3.5-flash":    1_000_000,
-    "gemini/gemini-1.5-flash":    1_000_000,
-    "anthropic/claude-sonnet-4-6": 200_000,
-    "claude-sonnet-4-6":           200_000,
-    "openai/gpt-4o-mini":          128_000,
+    "gemini/gemini-3.5-flash":       1_000_000,
+    "gemini/gemini-1.5-flash":       1_000_000,
+    "anthropic/claude-sonnet-4-6":   200_000,
+    "claude-sonnet-4-6":             200_000,
+    "openai/gpt-4o-mini":            128_000,
+    "groq/llama-3.3-70b-versatile":  128_000,
+    "deepseek/deepseek-chat":        128_000,
 }
 
 # ── LiteLLM adapter ─────────────────────────────────────────────────────────────
@@ -184,11 +202,29 @@ def _get_client_and_model_for_identity():
     """Return (client, model) for the current request's identity.
 
     Priority:
+      0. CHAT_PROVIDER env override (if set) — bypasses all per-user routing
       1. Logged-in user with own API key  → LiteLLM with their key/provider/model
       2. Logged-in user, no key           → LiteLLM Gemini pool (keyed by user_id)
       3. Guest                            → LiteLLM Gemini pool (keyed by guest_id)
       4. No Gemini pool configured        → fallback Anthropic client + model
     """
+    if _CHAT_PROVIDER:
+        if _CHAT_PROVIDER == 2:
+            identity_id = (flask_login.current_user.id
+                           if flask_login.current_user.is_authenticated
+                           else request.cookies.get("lethe_guest_id"))
+            pool_client = _gemini_client_from_pool(_GEMINI_CHAT_POOL, identity_id)
+            if pool_client:
+                print(f"[client] override=2 model=gemini/gemini-3.5-flash", flush=True)
+                return pool_client, "gemini/gemini-3.5-flash"
+        elif _CHAT_PROVIDER in _PROVIDER_SWITCH:
+            model, key_env = _PROVIDER_SWITCH[_CHAT_PROVIDER]
+            api_key = os.getenv(key_env, "")
+            if api_key:
+                print(f"[client] override={_CHAT_PROVIDER} model={model}", flush=True)
+                return _LiteLLMClient(model, api_key), model
+            print(f"[client] override={_CHAT_PROVIDER} WARN: {key_env} not set — using default routing", flush=True)
+
     if flask_login.current_user.is_authenticated:
         enc = flask_login.current_user.api_key_encrypted
         if enc:
@@ -472,6 +508,60 @@ def reset():
     _set_active_chat_id(new_id)
     return jsonify({"status": "ok", "chat_id": new_id})
 
+# ── Send helpers ────────────────────────────────────────────────────────────────
+
+def _snapshot_session(sess, code_id):
+    """Capture the parts of session state that sess.send() may mutate."""
+    return (
+        len(sess.history),
+        set(sess.blocks.keys()),
+        list(sess.blocks[code_id].get("diffs", [])) if code_id and code_id in sess.blocks else None,
+    )
+
+def _restore_session(sess, snapshot, code_id):
+    """Roll back session state to a snapshot taken before a failed send()."""
+    history_len, block_ids, code_diffs = snapshot
+    del sess.history[history_len:]
+    for bid in [b for b in list(sess.blocks) if b not in block_ids]:
+        del sess.blocks[bid]
+    if code_diffs is not None and code_id in sess.blocks:
+        sess.blocks[code_id]["diffs"] = code_diffs
+
+def _send_with_fallback(sess, text, **kwargs):
+    """Call sess.send(); on any API error restore state and retry with Claude.
+
+    The session's client and model are always restored to their original values
+    after this call, whether or not the fallback was used.
+    """
+    code_id  = kwargs.get("code_id")
+    snapshot = _snapshot_session(sess, code_id)
+    try:
+        return sess.send(text, **kwargs)
+    except Exception as primary_err:
+        print(f"[send] primary error ({type(primary_err).__name__}): {primary_err} — attempting Claude fallback", flush=True)
+        _restore_session(sess, snapshot, code_id)
+
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+        already_claude = any(m in sess.model for m in ("claude", "anthropic"))
+        if not anthropic_key or already_claude:
+            raise  # nothing to fall back to
+
+        original_client, original_model = sess.client, sess.model
+        fallback_snapshot = _snapshot_session(sess, code_id)
+        sess.client = _LiteLLMClient("anthropic/claude-sonnet-4-6", anthropic_key)
+        sess.model  = "anthropic/claude-sonnet-4-6"
+        try:
+            result = sess.send(text, **kwargs)
+            print(f"[send] Claude fallback succeeded", flush=True)
+            return result
+        except Exception as fallback_err:
+            print(f"[send] Claude fallback also failed: {fallback_err}", flush=True)
+            _restore_session(sess, fallback_snapshot, code_id)
+            raise fallback_err
+        finally:
+            sess.client = original_client
+            sess.model  = original_model
+
 # ── Core routes ─────────────────────────────────────────────────────────────────
 
 @app.route("/send", methods=["POST"])
@@ -518,16 +608,19 @@ def send():
 
     is_first_msg = len(sess.history) == 0
 
-    result = sess.send(
-        text,
-        image_path=image_path,
-        code_path=code_path,
-        code_id=code_id,
-        text_path=text_path,
-        pdf_path=pdf_path,
-        auto_rename_images=auto_rename_images,
-        auto_title_chats=auto_title_chats,
-    )
+    try:
+        result = _send_with_fallback(
+            sess, text,
+            image_path=image_path,
+            code_path=code_path,
+            code_id=code_id,
+            text_path=text_path,
+            pdf_path=pdf_path,
+            auto_rename_images=auto_rename_images,
+            auto_title_chats=auto_title_chats,
+        )
+    except Exception:
+        return jsonify({"error": "AI provider unavailable. Please try again."}), 502
 
     # ── Clean reply ─────────────────────────────────────────────────────────────
     wants_title       = is_first_msg and auto_title_chats
@@ -653,7 +746,7 @@ def retry():
         else:
             user_text = ""
 
-        result = sess.send(user_text)
+        result = _send_with_fallback(sess, user_text)
         raw_reply = result["reply"]
         clean_reply, _, _ = _clean_injected_reply(raw_reply, False, False)
         if clean_reply != raw_reply:
