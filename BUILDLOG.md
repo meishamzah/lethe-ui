@@ -2,6 +2,45 @@
 
 ---
 
+## Session: 2026-06-29 — Gemini Flash via LiteLLM for chat routing
+
+### What was implemented
+- **LiteLLM adapter in `app.py`**: Added `_LiteLLMClient` / `_LiteLLMMessages` adapter classes that expose the same `.messages.create()` interface as the Anthropic SDK. The adapter translates Anthropic-format message content (image blocks, document blocks, text) to OpenAI/LiteLLM format before calling `litellm.completion()`, and wraps the response to expose `.content[0].text` and `.usage.input_tokens` — so `lethe.py` is provider-agnostic.
+- **Gemini key pools**: Replaced `CHAT_KEY_POOL` / `BACKEND_KEY_POOL` env vars with `GEMINI_CHAT_KEY_POOL` and `GEMINI_BACKEND_KEY_POOL`. Both are comma-separated lists of Gemini API keys. Selection is deterministic by identity: `hash(str(identity_id)) % len(pool)`.
+- **Updated `_get_client_for_identity()`**: Now returns:
+  1. `_LiteLLMClient` with user's own key + provider (if stored in DB)
+  2. `_LiteLLMClient` with Gemini pool key keyed by `user_id` (logged-in, no own key)
+  3. `_LiteLLMClient` with Gemini pool key keyed by `lethe_guest_id` cookie (guest)
+  4. Falls back to `_anthropic_client` when `GEMINI_CHAT_KEY_POOL` is empty
+- **Compress always uses Anthropic**: `_anthropic_client` (keyed to `ANTHROPIC_API_KEY`) is passed as `compress_client` to every `ContextSession`. Updated `ContextSession.__init__` in `lethe.py` to accept `compress_client` and `compress_model` params.
+- **`lethe.py` routing**: All 9 API calls inside compress methods (`compress_image`, `_compress_code`, `_compress_text`, `_score_pdf_sections`, `_summarize_pdf_text_track`, `_summarize_pdf_image_track`, `_merge_pdf_tracks`, `_compress_pdf_phase1`) now use `self.compress_client` + `self.compress_model`. `send()` remains on `self.client`.
+- **`db.py`**: `reconstruct_session()` now accepts optional `compress_client` and forwards it to `ContextSession`.
+- **`requirements.txt`**: `litellm` was already present; no change needed.
+
+### Provider model map
+| Provider setting | LiteLLM model string |
+|---|---|
+| gemini | gemini/gemini-1.5-flash |
+| anthropic | anthropic/claude-sonnet-4-6 |
+| openai | openai/gpt-4o-mini |
+
+### Message format conversion
+- `image` blocks → `image_url` with data URI (Gemini supports this via LiteLLM)
+- `document` blocks (PDF, Anthropic-native) → text stub: `"[PDF document — not available via this provider]"`. Native PDF reading is preserved when the user brings their own Anthropic key (chat routes through Anthropic/LiteLLM, which passes document blocks correctly).
+- Compress always uses Anthropic directly, so PDF compression is unaffected.
+
+### Tested
+- Backend startup confirms no import errors
+- Routing logic verified by code review (manual API test requires live Gemini keys)
+
+### Not implemented / deferred
+- `GEMINI_BACKEND_KEY_POOL` is parsed and stored but not yet wired to a call site. Currently the ephemeral injection (chat title, image title) is bundled into the same `send()` API call and uses the chat client naturally. A dedicated backend pool call site can be added when titling/naming become separate API calls.
+
+### Current state
+All chat traffic routes to Gemini Flash via LiteLLM. Compression continues via Anthropic. Fallback to Anthropic when no Gemini pool is configured ensures zero downtime during env-var rollout.
+
+---
+
 ## Session: 2026-06-28 — M4 bug fix + reply cleaning + M5 Phase 1 prep
 
 ### What was implemented

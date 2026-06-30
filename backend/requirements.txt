@@ -9,3 +9,4 @@ cryptography
 requests
 pymupdf
 psycopg2-binary
+litellm

@@ -551,9 +551,9 @@ def get_blocks_for_chat(chat_id):
 
 # ── Session reconstruction ─────────────────────────────────────────────────────
 
-def reconstruct_session(chat_id, client):
+def reconstruct_session(chat_id, client, compress_client=None):
     from lethe import ContextSession
-    session = ContextSession(client=client)
+    session = ContextSession(client=client, compress_client=compress_client)
     session.history = load_history(chat_id)
 
     for block in get_blocks_for_chat(chat_id):

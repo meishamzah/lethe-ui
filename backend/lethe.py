@@ -8,9 +8,11 @@ from PIL import Image
 import difflib
 
 class ContextSession:
-    def __init__(self, client, model="claude-sonnet-4-6"):
-        self.client = client
+    def __init__(self, client, compress_client=None, model="claude-sonnet-4-6", compress_model="claude-sonnet-4-6"):
+        self.client = client           # chat (send) — may be LiteLLM adapter or Anthropic
+        self.compress_client = compress_client or client  # always Anthropic when provided
         self.model = model
+        self.compress_model = compress_model
         self.history = []
         self.blocks = {}
 
@@ -233,8 +235,8 @@ class ContextSession:
     
     Respond with ONLY a JSON array of message indices. Example: [0, 1, 3, 5]"""
     
-        scanner_response = self.client.messages.create(
-            model=self.model,
+        scanner_response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=256,
             messages=[{"role": "user", "content": scanner_prompt}]
         )
@@ -274,12 +276,12 @@ class ContextSession:
     Ignore anything that was never brought up.
     Be concise. This summary will replace the raw image in the conversation history going forward."""
     
-        summary_response = self.client.messages.create(
-            model=self.model,
+        summary_response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=512,
             messages=[{"role": "user", "content": summarize_prompt}]
         )
-    
+
         summary = summary_response.content[0].text
         summary_tokens = len(summary.split()) * 1.3  # rough token estimate for summary text
 
@@ -424,8 +426,8 @@ Write a compact summary that includes:
 
 Be concise. This summary replaces the raw code and all its versions in conversation history."""
 
-        summary_response = self.client.messages.create(
-            model=self.model,
+        summary_response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=1024,
             messages=[{"role": "user", "content": summarize_prompt}]
         )
@@ -534,8 +536,8 @@ Write a compact summary using tiered compression:
 
 Be concise. This summary replaces the raw file content in conversation history."""
 
-        summary_response = self.client.messages.create(
-            model=self.model,
+        summary_response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=512,
             messages=[{"role": "user", "content": summarize_prompt}]
         )
@@ -744,8 +746,8 @@ For each section assign an engagement tier:
 
 Respond ONLY with a JSON object. Example: {{"Page 1": 1, "Page 2": 3, "Page 3": 2}}"""
 
-        response = self.client.messages.create(
-            model=self.model,
+        response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=512,
             messages=[{"role": "user", "content": scanner_prompt}]
         )
@@ -786,8 +788,8 @@ Write a unified summary:
 
 Start with a 1-sentence overview of the whole document, then cover sections in order. Be concise."""
 
-        response = self.client.messages.create(
-            model=self.model,
+        response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=1024,
             messages=[{"role": "user", "content": summarize_prompt}]
         )
@@ -815,8 +817,8 @@ Conversation transcript:
 
 Describe this image in 2-4 sentences: what it shows, key data or labels visible, and its relevance to what was discussed."""
 
-                response = self.client.messages.create(
-                    model=self.model,
+                response = self.compress_client.messages.create(
+                    model=self.compress_model,
                     max_tokens=200,
                     messages=[{
                         "role": "user",
@@ -857,8 +859,8 @@ Conversation context:
 
 Combine into a single coherent compressed summary. Preserve relationships between text sections and figures (e.g. "Figure 2 showed X, which section 3 explained as Y"). Focus on what was actually discussed. Be concise."""
 
-        response = self.client.messages.create(
-            model=self.model,
+        response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=1024,
             messages=[{"role": "user", "content": merge_prompt}]
         )
@@ -898,8 +900,8 @@ Based on the conversation, write a compact summary of:
 
 Be concise. This summary replaces the PDF in conversation history."""
 
-        summary_response = self.client.messages.create(
-            model=self.model,
+        summary_response = self.compress_client.messages.create(
+            model=self.compress_model,
             max_tokens=512,
             messages=[{"role": "user", "content": summarize_prompt}]
         )
