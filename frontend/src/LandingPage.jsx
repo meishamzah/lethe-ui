@@ -1,16 +1,9 @@
-import { useEffect } from "react"
+import { useEffect, useContext } from "react"
 import { useNavigate } from "react-router-dom"
+import { TransitionContext } from "./TransitionContext.js"
+import RiverLogo from "./RiverLogo.jsx"
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:5000"
-
-const LetheLogo = ({ size = 26 }) => (
-  <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
-    <rect x="0.5" y="0.5" width="31" height="31" rx="8" fill="#101010" stroke="#2A2A2A" />
-    <line x1="9" y1="10" x2="23" y2="10" stroke="#4ECDC4" strokeWidth="2.2" strokeLinecap="round" />
-    <line x1="9" y1="16" x2="20" y2="16" stroke="#4ECDC4" strokeWidth="2.2" strokeLinecap="round" opacity="0.7" />
-    <line x1="9" y1="22" x2="15" y2="22" stroke="#4ECDC4" strokeWidth="2.2" strokeLinecap="round" opacity="0.4" />
-  </svg>
-)
 
 const GoogleIcon = () => (
   <svg width="17" height="17" viewBox="0 0 18 18">
@@ -69,21 +62,37 @@ const features = [
 
 export default function LandingPage() {
   const navigate = useNavigate()
+  const { setIsTransitioning } = useContext(TransitionContext)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get("logged_out") === "1") {
       window.history.replaceState({}, "", "/")
+      setIsTransitioning(false)
       return
     }
     fetch(`${API}/auth/me`, { credentials: "include" })
       .then(r => r.json())
-      .then(data => { if (data.authenticated) navigate("/chat", { replace: true }) })
-      .catch(() => {})
+      .then(data => {
+        if (data.authenticated) {
+          setIsTransitioning(true)
+          navigate("/chat", { replace: true })
+        } else {
+          setIsTransitioning(false)
+        }
+      })
+      .catch(() => { setIsTransitioning(false) })
   }, [navigate])
 
-  const startFree = () => navigate("/chat")
-  const loginGoogle = () => { window.location.href = `${API}/auth/google` }
+  const startFree = () => {
+    setIsTransitioning(true)
+    navigate("/chat")
+  }
+
+  const loginGoogle = () => {
+    setIsTransitioning(true)
+    window.location.href = `${API}/auth/google`
+  }
 
   return (
     <div style={{ background: "#0F0F0F", color: "#E8E8E8", fontFamily: "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", minHeight: "100vh", overflowX: "hidden" }}>
@@ -91,7 +100,7 @@ export default function LandingPage() {
       {/* NAV */}
       <nav style={{ maxWidth: 1180, margin: "0 auto", padding: "22px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <LetheLogo />
+          <RiverLogo height={26} />
           <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: "0.04em" }}>Lethe</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
@@ -329,7 +338,7 @@ export default function LandingPage() {
       <footer style={{ maxWidth: 1180, margin: "0 auto", padding: "80px 32px 48px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 20, paddingTop: 32, borderTop: "1px solid #1c1c1c" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <LetheLogo size={22} />
+            <RiverLogo height={22} />
             <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: "0.04em" }}>Lethe</span>
             <span style={{ fontSize: 13, color: "#555", marginLeft: 6 }}>Context compression for LLM chats</span>
           </div>

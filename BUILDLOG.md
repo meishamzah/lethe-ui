@@ -2,6 +2,59 @@
 
 ---
 
+## Session: 2026-06-29 — River logo + animated loading screen + page transitions
+
+### What was implemented
+
+**Logo replacement**
+- Removed the old 3-line-in-rounded-square `LetheLogo` component from `LandingPage.jsx`.
+- Created `frontend/src/RiverLogo.jsx` — the three-wave river SVG (`viewBox="0 0 800 500"`, aspect ratio 1.6:1) as a shared React component. `height` prop controls size; `width` is computed automatically.
+- Applied in `LandingPage.jsx` nav (height 26) and footer (height 22).
+- Applied in `App.jsx` sidebar header alongside the "Lethe" wordmark (height 18).
+- No background rect included — the parent background handles it.
+
+**Loading screen (`frontend/src/LoadingScreen.jsx`)**
+- Full-screen fixed overlay (`z-index: 9999`, background `#0F0F0F`).
+- Inlines the river SVG (3 wave paths only, no rect) with CSS `@keyframes letheWave` animation.
+- Wave 1 (full opacity): 0ms delay; wave 2 (0.62 opacity): 150ms delay; wave 3 (0.32 opacity): 300ms delay.
+- Duration 1.8s ease-in-out infinite. Each wave translates -12px at the 50% keyframe.
+- CSS class `.lethe-wave-svg` scopes the animation to avoid conflicts.
+- Controlled by `show` prop: fades in/out via `opacity` + `transition: 0.35s ease`, `pointerEvents: none` when hidden.
+- "Lethe" wordmark below the animated logo.
+
+**Transition context (`frontend/src/TransitionContext.js`)**
+- Holds `isTransitioning` state. Defined as a separate module to avoid circular imports between `main.jsx`, `LandingPage.jsx`, and `App.jsx`.
+
+**`main.jsx` — AppShell wrapper**
+- Replaced the bare `<Routes>` with an `AppShell` component that owns `isTransitioning` state (starts `true` so the loading screen covers the initial paint).
+- `TransitionContext.Provider` wraps the routes + `LoadingScreen`.
+- Each route is responsible for calling `setIsTransitioning(false)` when it has finished loading.
+
+**`LandingPage.jsx` — transition hooks**
+- `useContext(TransitionContext)` — calls `setIsTransitioning(false)` when the page is ready (after `/auth/me` resolves or `?logged_out=1` is processed).
+- "Start for free" and "Log in with Google" both call `setIsTransitioning(true)` before navigating, so the loading screen appears immediately.
+- If already authenticated, sets `isTransitioning(true)` before the auto-redirect to `/chat`.
+
+**`App.jsx` — transition hooks + lighter chat-switch fade**
+- `useContext(TransitionContext)` — calls `setIsTransitioning(false)` after `fetchChats()` fully resolves (both the success path and the final-retry failure path).
+- Sign-out handler calls `setIsTransitioning(true)` immediately before awaiting the logout, so the overlay appears as soon as sign-out is clicked.
+- Added `switchingChat` state. `switchToChat()` sets it `true` at start, `false` in the `finally` block.
+- Applied to the `chatArea` div: `opacity: switchingChat ? 0.3 : 1, transition: "opacity 0.2s ease"`. During the global loading screen (initial load), the fade is hidden behind it. For sidebar chat switching it gives a subtle fade without full-screen loading.
+
+### Transition coverage
+| Trigger | Behaviour |
+|---|---|
+| Initial page load | `isTransitioning=true` → loading screen → page calls `setIsTransitioning(false)` |
+| Landing → Chat ("Start for free") | `setIsTransitioning(true)` → navigate → App fetchChats → `setIsTransitioning(false)` |
+| Landing → Chat (Google OAuth) | `setIsTransitioning(true)` → full-page redirect → App mounts with default `true` → fetchChats → `false` |
+| Chat → Landing (sign out) | `setIsTransitioning(true)` → await logout → redirect → LandingPage mounts with default `true` → auth check → `false` |
+| Chat sidebar click | `switchingChat=true` → chat area fades to 30% opacity → data loads → `switchingChat=false` → fades to full |
+
+### Current state
+Loading screen and logo fully wired across all page transitions. River logo replaces every instance of the previous 3-line logo.
+
+---
+
 ## Session: 2026-06-29 — Gemini Flash via LiteLLM for chat routing
 
 ### What was implemented

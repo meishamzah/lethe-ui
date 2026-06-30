@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useContext } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import SettingsModal from "./Settings"
+import RiverLogo from "./RiverLogo.jsx"
+import { TransitionContext } from "./TransitionContext.js"
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:5000"
 
@@ -186,10 +188,14 @@ export default function App() {
   const [nudgeDismissed, setNudgeDismissed] = useState(false)
   const [hoveredMsgIdx, setHoveredMsgIdx] = useState(null)
   const [copiedMsgIdx, setCopiedMsgIdx] = useState(null)
+  const [switchingChat, setSwitchingChat] = useState(false)
+
+  const { setIsTransitioning } = useContext(TransitionContext)
 
   // ── Persistence: load chats on mount ──────────────────────────────────────
 
   const switchToChat = async (id) => {
+    setSwitchingChat(true)
     setActiveChatId(id)
     try {
       const res = await apiFetch(`/switch_chat/${id}`, { method: "POST" })
@@ -219,6 +225,8 @@ export default function App() {
       setCompressionMsgFading(false)
     } catch (e) {
       console.error("Failed to switch chat", e)
+    } finally {
+      setSwitchingChat(false)
     }
   }
 
@@ -238,12 +246,14 @@ export default function App() {
         setChats([{ id: ncData.chat_id, title: "New Chat" }])
         setActiveChatId(ncData.chat_id)
       }
+      setIsTransitioning(false)
     } catch (e) {
       console.error("Failed to fetch chats:", e.message)
       if (retries > 0) {
         setTimeout(() => fetchChats(retries - 1), 1500)
       } else {
         setChatsLoading(false)
+        setIsTransitioning(false)
       }
     }
   }
@@ -581,7 +591,10 @@ export default function App() {
       <div style={styles.sidebar}>
         <div style={{ padding: "16px 12px 0" }}>
           <div style={styles.sidebarHeader}>
-            <span style={styles.logo}>Lethe</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <RiverLogo height={18} />
+              <span style={styles.logo}>Lethe</span>
+            </div>
             <button style={styles.newChat} onClick={async () => {
               try {
                 const res = await apiFetch("/new_chat", { method: "POST" })
@@ -664,6 +677,7 @@ export default function App() {
                     <button
                       style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 10, padding: 0 }}
                       onClick={async () => {
+                        setIsTransitioning(true)
                         try { await apiFetch("/auth/logout", { method: "POST" }) } catch (e) {}
                         localStorage.clear()
                         document.cookie = "lethe_guest_id=; path=/; max-age=0; SameSite=Lax"
@@ -697,7 +711,7 @@ export default function App() {
 
       {/* MIDDLE CHAT */}
       <div style={styles.main}>
-        <div style={styles.chatArea}>
+        <div style={{ ...styles.chatArea, opacity: switchingChat ? 0.3 : 1, transition: "opacity 0.2s ease" }}>
           {messages.length === 0 && (
             <div style={styles.empty}>
               <div style={styles.emptyTitle}>Lethe</div>
