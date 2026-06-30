@@ -157,14 +157,14 @@ def _gemini_client_from_pool(pool, identity_id):
     idx = hash(str(identity_id)) % len(pool)
     return _LiteLLMClient("gemini/gemini-1.5-flash", pool[idx])
 
-def _get_client_for_identity():
-    """Return the chat client for the current request's identity.
+def _get_client_and_model_for_identity():
+    """Return (client, model) for the current request's identity.
 
     Priority:
-      1. Logged-in user with own API key  → LiteLLM with their key/provider
-      2. Logged-in user, no key           → LiteLLM with Gemini pool (keyed by user_id)
-      3. Guest                            → LiteLLM with Gemini pool (keyed by guest_id)
-      4. No Gemini pool configured        → fallback Anthropic client
+      1. Logged-in user with own API key  → LiteLLM with their key/provider/model
+      2. Logged-in user, no key           → LiteLLM Gemini pool (keyed by user_id)
+      3. Guest                            → LiteLLM Gemini pool (keyed by guest_id)
+      4. No Gemini pool configured        → fallback Anthropic client + model
     """
     if flask_login.current_user.is_authenticated:
         enc = flask_login.current_user.api_key_encrypted
@@ -173,14 +173,18 @@ def _get_client_for_identity():
                 raw      = _decrypt_key(enc)
                 provider = (getattr(flask_login.current_user, "api_provider", None) or "anthropic").lower()
                 model    = _PROVIDER_MODEL.get(provider, "gemini/gemini-1.5-flash")
-                return _LiteLLMClient(model, raw)
-            except Exception:
-                pass
+                return _LiteLLMClient(model, raw), model
+            except Exception as e:
+                print(f"[lethe] own-key client failed: {type(e).__name__}: {e}", flush=True)
         identity_id = flask_login.current_user.id
     else:
         identity_id = request.cookies.get("lethe_guest_id")
 
-    return _gemini_client_from_pool(_GEMINI_CHAT_POOL, identity_id) or _anthropic_client
+    pool_client = _gemini_client_from_pool(_GEMINI_CHAT_POOL, identity_id)
+    if pool_client:
+        return pool_client, "gemini/gemini-1.5-flash"
+
+    return _anthropic_client, "claude-sonnet-4-6"
 
 # ── Encryption ──────────────────────────────────────────────────────────────────
 
@@ -278,8 +282,9 @@ def get_active_session():
     if chat_id is None:
         return None
     if chat_id not in _sessions:
-        client = _get_client_for_identity()
-        _sessions[chat_id] = database.reconstruct_session(chat_id, client, _anthropic_client)
+        client, model = _get_client_and_model_for_identity()
+        _sessions[chat_id] = database.reconstruct_session(
+            chat_id, client, _anthropic_client, model=model)
     return _sessions.get(chat_id)
 
 # ── DB init ─────────────────────────────────────────────────────────────────────
@@ -296,7 +301,10 @@ def get_chats():
 def new_chat():
     chat_id = create_chat_for_identity("New chat")
     _set_active_chat_id(chat_id)
-    _sessions[chat_id] = ContextSession(client=_get_client_for_identity(), compress_client=_anthropic_client)
+    client, model = _get_client_and_model_for_identity()
+    _sessions[chat_id] = ContextSession(
+        client=client, compress_client=_anthropic_client,
+        model=model, compress_model="claude-sonnet-4-6")
     database.log_event("new_chat", **_event_ctx())
     return jsonify({"chat_id": chat_id})
 
@@ -308,7 +316,9 @@ def switch_chat(chat_id):
 
     _set_active_chat_id(chat_id)
     if chat_id not in _sessions:
-        _sessions[chat_id] = database.reconstruct_session(chat_id, _get_client_for_identity(), _anthropic_client)
+        client, model = _get_client_and_model_for_identity()
+        _sessions[chat_id] = database.reconstruct_session(
+            chat_id, client, _anthropic_client, model=model)
 
     sess = _sessions[chat_id]
 
@@ -347,7 +357,10 @@ def delete_chat_route(chat_id):
             new_active = remaining[0]["id"]
         else:
             new_active = create_chat_for_identity("New chat")
-            _sessions[new_active] = ContextSession(client=_get_client_for_identity(), compress_client=_anthropic_client)
+            _client, _model = _get_client_and_model_for_identity()
+            _sessions[new_active] = ContextSession(
+                client=_client, compress_client=_anthropic_client,
+                model=_model, compress_model="claude-sonnet-4-6")
         _set_active_chat_id(new_active)
 
     return jsonify({"ok": True, "active_chat_id": new_active})
@@ -425,7 +438,10 @@ def reset():
         database.delete_chat(chat["id"])
         _sessions.pop(chat["id"], None)
     new_id = create_chat_for_identity("New chat")
-    _sessions[new_id] = ContextSession(client=_get_client_for_identity(), compress_client=_anthropic_client)
+    _client, _model = _get_client_and_model_for_identity()
+    _sessions[new_id] = ContextSession(
+        client=_client, compress_client=_anthropic_client,
+        model=_model, compress_model="claude-sonnet-4-6")
     _set_active_chat_id(new_id)
     return jsonify({"status": "ok", "chat_id": new_id})
 
@@ -633,6 +649,6 @@ def history():
     return jsonify({"history": safe_history})
 
 if __name__ == "__main__":
-    print(f"[startup] Gemini chat pool: {len(_GEMINI_CHAT_POOL)} key(s) loaded", flush=True)
-    print(f"[startup] Gemini backend pool: {len(_GEMINI_BACKEND_POOL)} key(s) loaded", flush=True)
+    print(f"[startup] Gemini chat pool: {len(_GEMINI_CHAT_POOL)} key(s) | "
+          f"backend pool: {len(_GEMINI_BACKEND_POOL)} key(s)", flush=True)
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)

@@ -2,6 +2,42 @@
 
 ---
 
+## Session: 2026-06-30 — Fix model/client mismatch (Gemini traffic falling back to Claude)
+
+### Root cause
+`_get_client_for_identity()` returned only a client object. Every `ContextSession`
+instantiation and `reconstruct_session()` call left `model` at its default
+`"claude-sonnet-4-6"`. When `ContextSession.send()` called
+`self.client.messages.create(model=self.model, ...)`, it passed `"claude-sonnet-4-6"`
+to the LiteLLM adapter — which cannot resolve that model string against a Gemini key.
+LiteLLM raised an error that was caught upstream, causing silent fallback to the
+Anthropic client. Gemini keys were being read correctly; they were simply never used.
+
+### Fix
+
+**`backend/app.py`**
+- Renamed `_get_client_for_identity()` → `_get_client_and_model_for_identity()` which
+  returns `(client, model)` in all four branches (own key, logged-in pool, guest pool,
+  Anthropic fallback).
+- Updated all five `ContextSession` / `reconstruct_session` call sites to unpack the
+  tuple and pass `model=model, compress_model="claude-sonnet-4-6"` explicitly.
+- Cleaned up the temporary `[DEBUG]` print in the own-key except block to a consistent
+  `[lethe]` prefix log line.
+- Consolidated startup log to a single line reporting both pool sizes.
+
+**`backend/db.py`**
+- `reconstruct_session()` now accepts `model` and `compress_model` keyword args
+  (default `"claude-sonnet-4-6"` for backward compat) and forwards them into
+  `ContextSession(...)`.
+
+### Decision log
+The `compress_model` is hardcoded to `"claude-sonnet-4-6"` at all call sites
+because compress always runs through `_anthropic_client` regardless of identity.
+Keeping it explicit at every site makes the intent obvious and avoids the same
+class of default-drift bug reoccurring.
+
+---
+
 ## Session: 2026-06-29 — River logo + animated loading screen + page transitions
 
 ### What was implemented
