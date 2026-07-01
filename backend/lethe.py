@@ -168,9 +168,17 @@ class ContextSession:
 
         self.history.append({"role": "assistant", "content": raw_reply})
 
+        # Overwrite the rough pre-call estimates with LLM-reported input tokens
+        # minus the approximate cost of the user's typed text prompt.
+        prompt_tokens = len(text) // 4
         if image_path:
-            text_tokens = len(text) // 4
-            self.blocks[block_id]["image_tokens"] = response.usage.input_tokens - text_tokens
+            self.blocks[block_id]["image_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
+        if code_path and code_id:
+            self.blocks[code_id]["code_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
+        if text_path:
+            self.blocks[text_id]["text_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
+        if pdf_path:
+            self.blocks[pdf_id]["pdf_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
 
         return {"reply": raw_reply}
     
