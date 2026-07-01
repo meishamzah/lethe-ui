@@ -15,6 +15,7 @@ class ContextSession:
         self.compress_model = compress_model
         self.history = []
         self.blocks = {}
+        self.history_tokens = 0  # input_tokens from the previous turn (h)
 
     def _encode_image(self, image_path):
         """Convert image file to base64 for API"""
@@ -168,17 +169,22 @@ class ContextSession:
 
         self.history.append({"role": "assistant", "content": raw_reply})
 
-        # Overwrite the rough pre-call estimates with LLM-reported input tokens
-        # minus the approximate cost of the user's typed text prompt.
-        prompt_tokens = len(text) // 4
+        # d = total_input - h - t
+        #   total_input  = response.usage.input_tokens  (h + d + t this turn)
+        #   h            = self.history_tokens           (set at end of previous turn)
+        #   t            = len(text) // 4               (approximate prompt text tokens)
+        t = len(text) // 4
+        doc_tokens = max(0, response.usage.input_tokens - self.history_tokens - t)
         if image_path:
-            self.blocks[block_id]["image_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
+            self.blocks[block_id]["image_tokens"] = doc_tokens
         if code_path and code_id:
-            self.blocks[code_id]["code_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
+            self.blocks[code_id]["code_tokens"] = doc_tokens
         if text_path:
-            self.blocks[text_id]["text_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
+            self.blocks[text_id]["text_tokens"] = doc_tokens
         if pdf_path:
-            self.blocks[pdf_id]["pdf_tokens"] = max(0, response.usage.input_tokens - prompt_tokens)
+            self.blocks[pdf_id]["pdf_tokens"] = doc_tokens
+
+        self.history_tokens = response.usage.input_tokens  # becomes h for the next turn
 
         return {"reply": raw_reply}
     
