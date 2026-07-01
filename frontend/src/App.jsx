@@ -326,6 +326,13 @@ export default function App() {
     return () => document.removeEventListener("mousedown", handler)
   }, [uploadMenuOpen])
 
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = Math.min(el.scrollHeight, 200) + "px"
+  }, [input])
+
   const handleSettingsChange = (newSettings) => {
     if (newSettings.defaultViewMode !== settings.defaultViewMode) setViewMode(newSettings.defaultViewMode)
     if (newSettings.defaultStatusFilter !== settings.defaultStatusFilter) setStatusFilter(newSettings.defaultStatusFilter)
@@ -388,10 +395,6 @@ export default function App() {
     }
     setMessages(prev => [...prev, userMsg])
     setInput("")
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto"
-      textareaRef.current.style.overflowY = "hidden"
-    }
     setPendingFile(null)
     setLoading(true)
     try {
@@ -961,21 +964,10 @@ export default function App() {
             )}
             <textarea
               ref={textareaRef}
-              style={styles.input}
+              style={{ ...styles.input, flex: "none", width: "100%", overflowY: "auto", minHeight: 0 }}
               value={input}
               disabled={loading}
-              onChange={e => {
-                setInput(e.target.value)
-                const el = e.target
-                el.style.height = "auto"
-                el.style.overflowY = "hidden"
-                if (el.scrollHeight > 200) {
-                  el.style.height = "200px"
-                  el.style.overflowY = "auto"
-                } else {
-                  el.style.height = el.scrollHeight + "px"
-                }
-              }}
+              onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder="Message Lethe..."
