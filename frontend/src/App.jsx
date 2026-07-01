@@ -375,7 +375,7 @@ export default function App() {
   }
 
   const sendMessage = async () => {
-    if (!input.trim() && !pendingFile) return
+    if (loading || (!input.trim() && !pendingFile)) return
     const capturedFile = pendingFile
     const isFirstMessage = messages.length === 0
     const userMsg = {
@@ -431,11 +431,13 @@ export default function App() {
       fetchStatus()
     } catch {
       setMessages(prev => [...prev, { role: "assistant", content: "Error reaching backend." }])
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const handleKeyDown = (e) => {
+    if (loading) return
     if (e.key === "Enter" && !e.shiftKey) {
       if (settings.sendOnEnter || e.ctrlKey) { e.preventDefault(); sendMessage() }
     }
@@ -959,13 +961,14 @@ export default function App() {
             )}
             <textarea
               ref={textareaRef}
-              style={{ ...styles.input, overflowY: "hidden" }}
+              style={styles.input}
               value={input}
+              disabled={loading}
               onChange={e => {
                 setInput(e.target.value)
                 const el = e.target
-                el.style.overflowY = "hidden"
                 el.style.height = "auto"
+                el.style.overflowY = "hidden"
                 if (el.scrollHeight > 200) {
                   el.style.height = "200px"
                   el.style.overflowY = "auto"
@@ -1008,7 +1011,11 @@ export default function App() {
                 )}
               </div>
               <div style={{ flex: 1 }} />
-              <button style={styles.sendBtn} onClick={sendMessage}>Send</button>
+              <button
+                style={{ ...styles.sendBtn, ...(loading ? { opacity: 0.45, cursor: "not-allowed" } : {}) }}
+                onClick={sendMessage}
+                disabled={loading}
+              >Send</button>
             </div>
           </div>
         </div>
