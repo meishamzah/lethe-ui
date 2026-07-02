@@ -190,6 +190,9 @@ export default function App() {
   const [copiedMsgIdx, setCopiedMsgIdx] = useState(null)
   const [switchingChat, setSwitchingChat] = useState(false)
   const [contextLimit, setContextLimit] = useState(200000)
+  const [editingChatId, setEditingChatId] = useState(null)
+  const [editingTitle, setEditingTitle] = useState("")
+  const editCancelRef = useRef(false)
 
   const { setIsTransitioning } = useContext(TransitionContext)
   const loadingStartRef = useRef(Date.now())
@@ -414,7 +417,9 @@ export default function App() {
       if (data.chat_title && settings.autoTitleChats) {
         setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, title: data.chat_title } : c))
       } else if (isFirstMessage) {
-        const title = input.slice(0, 30) + (input.length > 30 ? "..." : "")
+        const title = input.trim()
+          ? (input.length > 30 ? input.slice(0, 30) + "…" : input)
+          : (capturedFile ? capturedFile.file.name : "New chat")
         setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, title } : c))
       }
 
@@ -636,9 +641,30 @@ export default function App() {
           {chatsLoading && (
             <div style={{ fontSize: 11, color: "#555", padding: "6px 8px" }}>Connecting…</div>
           )}
-          {chats.map(chat => (
+          {chats.map(chat => editingChatId === chat.id ? (
+            <div key={chat.id} style={{ ...styles.sidebarItem, background: "#2A2A2A", display: "flex", alignItems: "center", gap: 4 }}>
+              <input
+                autoFocus
+                value={editingTitle}
+                onChange={e => setEditingTitle(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") { e.preventDefault(); e.target.blur() }
+                  if (e.key === "Escape") { editCancelRef.current = true; e.target.blur() }
+                }}
+                onBlur={async () => {
+                  if (editCancelRef.current) { editCancelRef.current = false; setEditingChatId(null); return }
+                  const title = editingTitle.trim() || chat.title
+                  await apiFetch(`/chats/${chat.id}/title`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) })
+                  setChats(prev => prev.map(c => c.id === chat.id ? { ...c, title } : c))
+                  setEditingChatId(null)
+                }}
+                style={{ flex: 1, background: "transparent", border: "none", borderBottom: "1px solid #4ECDC4", color: "#E8E8E8", fontSize: 12, outline: "none", fontFamily: "inherit", padding: "1px 0", minWidth: 0 }}
+              />
+            </div>
+          ) : (
             <div
               key={chat.id}
+              className="chat-item"
               style={{
                 ...styles.sidebarItem,
                 background: chat.id === activeChatId ? "#2A2A2A" : "transparent",
@@ -651,6 +677,13 @@ export default function App() {
                 {chat.title}
               </span>
               <button
+                className="chat-action-btn"
+                style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 12, padding: "2px 3px", flexShrink: 0, lineHeight: 1, borderRadius: 3 }}
+                title="Rename chat"
+                onClick={e => { e.stopPropagation(); setEditingChatId(chat.id); setEditingTitle(chat.title) }}
+              >✎</button>
+              <button
+                className="chat-action-btn"
                 style={{ background: "none", border: "none", color: "#444", cursor: "pointer", fontSize: 11, padding: "2px 4px", flexShrink: 0, lineHeight: 1, borderRadius: 3 }}
                 title="Delete chat"
                 onClick={async (e) => {
@@ -663,7 +696,6 @@ export default function App() {
                     if (remaining.length > 0) {
                       await switchToChat(data.active_chat_id)
                     } else {
-                      // Server auto-created a new chat
                       setChats([{ id: data.active_chat_id, title: "New Chat" }])
                       setActiveChatId(data.active_chat_id)
                       setMessages([])
@@ -1004,9 +1036,9 @@ export default function App() {
               </div>
               <div style={{ flex: 1 }} />
               <button
-                style={{ ...styles.sendBtn, ...(loading ? { opacity: 0.45, cursor: "not-allowed" } : {}) }}
+                style={{ ...styles.sendBtn, ...((loading || (!input.trim() && !pendingFile)) ? { opacity: 0.45, cursor: "not-allowed" } : {}) }}
                 onClick={sendMessage}
-                disabled={loading}
+                disabled={loading || (!input.trim() && !pendingFile)}
               >Send</button>
             </div>
           </div>

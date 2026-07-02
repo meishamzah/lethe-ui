@@ -321,6 +321,10 @@ button:active {
   opacity: 1 !important;
 }
 
+/* Chat sidebar action buttons (rename ✎, delete ✕) */
+.chat-item .chat-action-btn { opacity: 0; transition: opacity 0.12s; }
+.chat-item:hover .chat-action-btn { opacity: 1; }
+
 /* Message action bar buttons */
 .action-btn { color: #555 !important; opacity: 1 !important; }
 .action-btn:hover { color: #E8E8E8 !important; background: #2A2A2A !important; opacity: 1 !important; }
